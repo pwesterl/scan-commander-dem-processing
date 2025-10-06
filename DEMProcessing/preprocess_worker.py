@@ -21,12 +21,11 @@ fh = logging.FileHandler("logs/preprocess_worker.log", mode="a")
 fh.setFormatter(formatter)
 logger.addHandler(fh)
 
-# ----------------- Config -----------------
+
 repo = ImageRepository()
 TEMP_DIR = Path("/mnt/i/Peder/repo/geoint-dem-detection/data/temp")
 
 
-# ----------------- RabbitMQ helpers -----------------
 def get_rabbit_connection(retries=5, delay=5):
     """Blocking RabbitMQ connection with retry logic"""
     for attempt in range(retries):
@@ -67,7 +66,6 @@ def safe_ack(ch, delivery_tag):
         logger.warning("Ack failed, message will be requeued automatically")
 
 
-# ----------------- Preprocessing -----------------
 def get_areal_id(path: Path):
     match = re.search(r"/(Areal\d+)/", str(path))
     if not match:
@@ -75,9 +73,20 @@ def get_areal_id(path: Path):
     return match.group(1)
 
 
+def aggregate_20cm(image_path: Path, output_path: Path):
+    script = Path("/mnt/i/Peder/repo/geoint-dem-detection/tools/AggregateDEM.py")
+    cmd = [
+        "python3",
+        str(script),
+        str(image_path.parent),
+        str(output_path),
+        str(2),
+    ]
+
 def preprocess_image(image_path: Path, temp_dir: Path, max_workers: int = 4) -> Path:
     logger.info(f"Preprocessing {image_path}")
     areal_id = get_areal_id(image_path)
+    aggregate_20cm(image_path, Path("/skog-nas01/scan-data/AW_bearbetning_test") / areal_id / "aggregated_20cm")
     preprocess_output_dir = Path("/skog-nas01/scan-data/AW_bearbetning_test") / areal_id / "preprocessed"
     script = Path("/mnt/i/Peder/repo/geoint-dem-detection/tools/concatenatedTopographyThreeChannels.py")
     script_dir = script.parent

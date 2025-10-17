@@ -3,12 +3,14 @@ version: "3.9"
 services:
   rabbitmq:
     image: rabbitmq:3-management
-    container_name: rabbitmq
+    container_name: geoint-rabbitmq
     ports:
       - "5672:5672"
       - "15672:15672"  # RabbitMQ UI
     networks:
       - geoint
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
 
   db:
     image: postgres:15
@@ -23,23 +25,56 @@ services:
       - geoint
 
   watcher:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        REQUIREMENTS_FILE: requirements-watcher.txt
     container_name: geoint-watcher
     command: ["python3", "watcher.py"]
+    environment:
+      WATCH_DIR: /app/data/AW_bearbetning
+      POSTGRES_DB: geoint
+      POSTGRES_USER: geouser
+      POSTGRES_PASSWORD: geopass
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
     volumes:
-      - ./logs:/app/logs
-      - /skog-nas01/scan-data/AW_bearbetning_test:/skog-nas01/scan-data/AW_bearbetning_test:ro
+      - .:/app:cached
+      - ../../geoint-dem-detection:/app/geoint-dem-detection:ro
+      - logs_volume:/app/logs
+      - /skog-nas01/scan-data:/app/data:rw
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     depends_on:
       - db
     networks:
       - geoint
 
   publisher:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        REQUIREMENTS_FILE: requirements-publisher.txt
     container_name: geoint-publisher
     command: ["python3", "publisher.py"]
+    environment:
+      POSTGRES_DB: geoint
+      POSTGRES_USER: geouser
+      POSTGRES_PASSWORD: geopass
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      RABBITMQ_HOST: rabbitmq
     volumes:
-      - ./logs:/app/logs
+      - .:/app:cached
+      - ../../geoint-dem-detection:/app/geoint-dem-detection:ro # tabort?
+      - logs_volume:/app/logs
+      - /skog-nas01/scan-data:/app/data:rw #ta bort?
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     depends_on:
       - db
       - rabbitmq
@@ -47,37 +82,78 @@ services:
       - geoint
 
   preprocess_worker:
-    build: .
-    command: ["python3", "preprocess_worker.py"]
+    build:
+      context: ../geoint-dem-detection
+      dockerfile: Dockerfile
+    working_dir: /app
+    command: >
+      sh -c "mkdir -p /app/temp && pip install pika psycopg2-binary && python3 preprocess_worker.py"
+    environment:
+      TOOLS_DIR: /app/geoint-dem-detection/tools
+      TEMP_DIR: /app/temp
+      OUTPUT_DIR: /app/data/output
+      DB_FILE: /app/data/db/inference.db
+      RABBITMQ_HOST: rabbitmq
     volumes:
-      - ./logs:/app/logs
-      - /mnt/i/Peder/repo/geoint-dem-detection:/mnt/i/Peder/repo/geoint-dem-detection
-      - /skog-nas01/scan-data/AW_bearbetning_test:/skog-nas01/scan-data/AW_bearbetning_test
+      - .:/app:cached
+      - ../geoint-dem-detection:/app/geoint-dem-detection:ro
+      - logs_volume:/app/logs
+      - /skog-nas01/scan-data:/app/data:rw
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     depends_on:
       - rabbitmq
       - db
     networks:
       - geoint
     deploy:
-      replicas: 2   # CPU scaling, if using Swarm
+      replicas: 2
 
   inference_worker:
-    build: .
-    command: ["python3", "inference_worker.py"]
+    build:
+      context: ../geoint-dem-detection
+      dockerfile: Dockerfile
+    working_dir: /app
+    command: >
+      sh -c "mkdir -p /app/temp && pip install pika psycopg2-binary && python3 inference_worker.py"
+    environment:
+      INFERENCE_SCRIPT_DIR: /app/geoint-dem-detection/model
+      MODEL_PATH: /app/geoint-dem-detection/trainedModels/InstanceSegmentation
+      RABBITMQ_HOST: rabbitmq
     volumes:
-      - ./logs:/app/logs
-      - /mnt/i/Peder/repo/geoint-dem-detection:/mnt/i/Peder/repo/geoint-dem-detection
-      - /skog-nas01/scan-data/AW_bearbetning_test:/skog-nas01/scan-data/AW_bearbetning_test
+      - .:/app:cached
+      - ../geoint-dem-detection:/app/geoint-dem-detection:ro
+      - logs_volume:/app/logs
+      - /skog-nas01/scan-data:/app/data:rw
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     depends_on:
       - rabbitmq
       - db
     networks:
       - geoint
+
     deploy:
-      replicas: 1   # scale on GPU nodes if needed
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    runtime: nvidia
 
 volumes:
+  data_volume:
+    driver: local
+  logs_volume:
+    driver: local
   db_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
 
 networks:
   geoint:

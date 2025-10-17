@@ -4,11 +4,13 @@ import json
 import sys
 from pathlib import Path
 import pika
-from db_utils import ImageRepository, Status
+import os
+from db_utils import PreprocessRepository, Status
 
 # --- Logging ---
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+Path("logs").mkdir(exist_ok=True)
 formatter = logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S")
 fh = logging.FileHandler("logs/publisher.log", mode="a")
 fh.setFormatter(formatter)
@@ -17,13 +19,20 @@ ch = logging.StreamHandler(sys.stdout)
 ch.setFormatter(formatter)
 logger.addHandler(ch)
 
-repo = ImageRepository()
+repo = PreprocessRepository()
 QUEUE_POLL_INTERVAL = 5
 
+RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "localhost")
+RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", 5672))
+
 def get_rabbit_connection(retries=5, delay=5):
+    retries = 5
+    delay = 5
     for attempt in range(retries):
         try:
-            return pika.BlockingConnection(pika.ConnectionParameters('localhost'))
+            return pika.BlockingConnection(
+                pika.ConnectionParameters(host=RABBITMQ_HOST, port=RABBITMQ_PORT)
+            )
         except pika.exceptions.AMQPConnectionError as e:
             logger.warning(f"RabbitMQ connection failed ({attempt+1}/{retries}): {e}")
             time.sleep(delay)
@@ -55,7 +64,6 @@ def main():
             path = Path(job["source_path"])
             repo.update_status(path, Status.QUEUED)
             safe_publish("preprocess", {"path": str(path)})
-            logger.info(f"Published job {path} to preprocess queue")
         else:
             time.sleep(QUEUE_POLL_INTERVAL)
 

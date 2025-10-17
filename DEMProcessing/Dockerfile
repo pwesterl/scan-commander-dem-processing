@@ -1,25 +1,20 @@
-# Dockerfile
-FROM python:3.10-slim
+# Use slim Python image
+FROM python:3.10-slim-bullseye
 
-# Set workdir inside container
+# Set working directory
 WORKDIR /app
 
-# Install system dependencies (adjust if needed for geospatial libs)
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    python3-dev \
-    gdal-bin \
-    libgdal-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Allow specifying requirements at build time
+ARG REQUIREMENTS_FILE=requirements.txt
+COPY ${REQUIREMENTS_FILE} ./
 
-# Copy requirements first for caching
-COPY requirements.txt .
+# Install Python dependencies
+RUN pip install --no-cache-dir -r ${REQUIREMENTS_FILE}
 
-# Install Python deps
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy app source
+# Copy application code
 COPY . .
 
-# Default command (overridden in docker-compose)
-CMD ["python", "publisher.py"]
+# Ensure logs directory exists
+RUN mkdir -p logs
+
+CMD ["python3", "--version"]

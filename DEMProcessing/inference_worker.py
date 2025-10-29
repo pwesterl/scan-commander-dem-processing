@@ -62,7 +62,7 @@ def safe_ack(ch, delivery_tag):
         logger.warning("Ack failed, message will be requeued automatically")
 
 def get_areal_id(path: Path):
-    match = re.search(r"/(Areal\d+)/", str(path))
+    match = re.search(r"/(areal\d+|area\d+)/", str(path), re.IGNORECASE)
     if not match:
         raise ValueError(f"Could not find Areal ID in path: {path}")
     return match.group(1).lower()

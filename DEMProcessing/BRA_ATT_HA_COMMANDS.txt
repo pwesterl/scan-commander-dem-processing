@@ -1,0 +1,48 @@
+## SQL
+# Connect
+docker exec -it geoint-db psql -U geouser -d geoint
+
+## Inference Table
+SELECT COUNT(DISTINCT image_path) AS total_processed FROM inference_status WHERE status in ('processed');
+SELECT COUNT(DISTINCT (image_path, model_name)) AS total_processed FROM inference_status WHERE status in ('processed');
+SELECT COUNT(*) AS total_processed FROM inference_status WHERE status in ('processed','inferencing'); \watch 5
+SELECT * FROM inference_status WHERE status in ('inferencing') ORDER BY last_updated DESC LIMIT 10; \watch 5
+
+# Kolla efter duppar:
+'''
+    SELECT image_path, model_name, COUNT(*) AS count
+    FROM inference_status
+    GROUP BY image_path, model_name
+    HAVING COUNT(*) > 1;
+'''
+## Preprocess Table
+SELECT DISTINCT source_path FROM preprocess_status WHERE status = 
+'preprocessing';
+SELECT * FROM preprocess_status WHERE status = 'preprocessing' ORDER BY last_updated DESC LIMIT 100; \watch 5
+SELECT COUNT(DISTINCT source_path) as processing FROM preprocess_status WHERE status = 'preprocessing';
+## DB, bash
+docker exec -it geoint-watcher python3 -c "from db_utils import PreprocessRepository; PreprocessRepository().create_database()"
+docker exec -it geoint-watcher python3 -c "from db_utils import InferenceRepository; InferenceRepository().create_database()"
+docker exec -it geoint-watcher python3 -c "from db_utils import PreprocessRepository; from pathlib import Path; PreprocessRepository(Path('/app/data/AW_bearbetning')).insert_images_from_directory()" 
+
+OBS DELETE **** docker volume rm demprocessing_db_data ********
+
+Rabbit:
+docker exec -it 5e7941fa44ad rabbitmqctl list_consumers
+docker exec -it 5e7941fa44ad rabbitmqctl list_queues name messages_ready messages_unacknowledged
+docker exec -it geoint-rabbitmq rabbitmqctl list_queues
+docker exec -it geoint-rabbitmq rabbitmqctl purge_queue inference
+docker exec -it geoint-rabbitmq rabbitmqctl purge_queue preprocess
+
+nvidia-for-docker:
+curl -s -L https://nvidia.github.io/libnvidia-container/gpgkey | sudo apt-key add -
+distribution=$(. /etc/os-release; echo $ID$VERSION_ID)
+curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/liqbnvidia-container.list | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+
+
+sudo apt-get install -y nvidia-container-toolkit
+
+VALIDERA:
+docker exec -it demprocessing_preprocess_worker_1 python3 verify_preprocess_inference.py
+docker exec -it demprocessing_preprocess_worker_1 python3 missing.py

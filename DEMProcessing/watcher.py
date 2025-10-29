@@ -80,12 +80,22 @@ def main() -> None:
     event_handler = ImageHandler(repo, stable_wait=5.0)
     observer = Observer()
     observer.schedule(event_handler, str(WATCH_DIRECTORY), recursive=True) # Sätt true om vi vill kolla submappar
-    observer.start()
+    
+    # observer.start()
+    if observer.is_alive():
+        logging.info("=======")
+        logging.info("Image Directory Watcher started")
+        logging.info(f"Watching directory: {WATCH_DIRECTORY}")
+        logging.info("=======")
+    else:
+        logging.info("=======")
+        logging.info("Image Directory Watcher started, RUNNING WITHOUT WATCHING")
+        logging.info("=======")
+    
+    
 
-    logging.info("=======")
-    logging.info("Image Directory Watcher started")
-    logging.info(f"Watching directory: {WATCH_DIRECTORY}")
-    logging.info("=======")
+
+
 
     def shutdown_handler(sig, frame):
         logging.info("Stopping observer...")

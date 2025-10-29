@@ -61,13 +61,13 @@ CREATE TABLE IF NOT EXISTS preprocess_status (
 CREATE_TABLE_INFERENCE = """
 CREATE TABLE IF NOT EXISTS inference_status (
     id SERIAL PRIMARY KEY,
-    image_path TEXT NOT NULL,
+    source_path TEXT NOT NULL,
     input_path TEXT NOT NULL, 
     model_name TEXT NOT NULL,
     status TEXT DEFAULT '',
     comment TEXT DEFAULT '',
     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(image_path, input_path, model_name)
+    UNIQUE(source_path, input_path, model_name)
 );
 """
 
@@ -150,6 +150,18 @@ class PreprocessRepository:
         except Exception:
             logger.exception(f"Failed to insert images from {self.image_dir}")
 
+    def get_all_processed_areals(self):
+        with self._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT DISTINCT substring(source_path from '.*/(Areal[0-9]+)/.*') AS areal_name
+                    FROM preprocess_status
+                    WHERE status IN ('preprocessed');
+                """)
+                rows = cur.fetchall()
+                return [r["areal_name"] for r in rows if r["areal_name"]]
+
+
 
     def get_status(self, path: Path) -> Optional[Status]:
         try:
@@ -225,9 +237,9 @@ class InferenceRepository:
     def update_status(self, image_path: Path, input_path: Path, model_name: str, status: Status, comment: str = ""):
         with self._get_conn() as conn, conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO inference_status (image_path, input_path, model_name, status, comment)
+                INSERT INTO inference_status (source_path, input_path, model_name, status, comment)
                 VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (image_path, input_path, model_name)
+                ON CONFLICT (source_path, input_path, model_name)
                 DO UPDATE SET
                     status = EXCLUDED.status,
                     comment = EXCLUDED.comment,
@@ -241,7 +253,7 @@ class InferenceRepository:
         with self._get_conn() as conn, conn.cursor() as cur:
             cur.execute("""
                 SELECT status FROM inference_status
-                WHERE image_path = %s AND model_name = %s
+                WHERE source_path = %s AND model_name = %s
             """, (str(image_path), model_name))
             row = cur.fetchone()
             return Status(row["status"]) if row else None

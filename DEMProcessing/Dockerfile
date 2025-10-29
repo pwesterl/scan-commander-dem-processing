@@ -1,5 +1,6 @@
 # Use slim Python image
 FROM python:3.10-slim-bullseye
+#FROM mirror.gcr.io/library/python:3.10-slim-bookworm
 
 # Set working directory
 WORKDIR /app

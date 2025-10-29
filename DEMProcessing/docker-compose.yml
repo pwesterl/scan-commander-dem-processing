@@ -108,7 +108,7 @@ services:
     networks:
       - geoint
     deploy:
-      replicas: 2
+      replicas: 1
 
   inference_worker:
     build:
@@ -142,8 +142,8 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-
-    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
 
 volumes:
   data_volume:

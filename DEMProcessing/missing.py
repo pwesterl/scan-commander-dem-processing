@@ -1,7 +1,7 @@
 from pathlib import Path
 
 # Path to your AW_bearbetning folder
-base_path = Path("/app/data/AW_bearbetning")
+base_path = Path("/app/data/AW_bearbetning_2025")
 
 # Get all Areal directories and extract numbers
 areal_dirs = [d.name for d in base_path.iterdir() if d.is_dir() and d.name.startswith("Areal")]

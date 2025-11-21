@@ -86,8 +86,7 @@ services:
       context: ../geoint-dem-detection
       dockerfile: Dockerfile
     working_dir: /app
-    command: >
-      sh -c "mkdir -p /app/temp && pip install pika psycopg2-binary && python3 preprocess_worker.py"
+    command: ["/app/start_preprocess.sh"] 
     environment:
       TOOLS_DIR: /app/geoint-dem-detection/tools
       TEMP_DIR: /app/temp
@@ -115,10 +114,10 @@ services:
       context: ../geoint-dem-detection
       dockerfile: Dockerfile
     working_dir: /app
-    command: >
-      sh -c "mkdir -p /app/temp && pip install pika psycopg2-binary && python3 inference_worker.py"
+    command: ["/app/start_inference.sh"] 
     environment:
       INFERENCE_SCRIPT_DIR: /app/geoint-dem-detection/model
+      NVIDIA_VISIBLE_DEVICES: all
       MODEL_PATH: /app/geoint-dem-detection/trainedModels/InstanceSegmentation
       RABBITMQ_HOST: rabbitmq
     volumes:
@@ -142,8 +141,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
+      
 
 volumes:
   data_volume:

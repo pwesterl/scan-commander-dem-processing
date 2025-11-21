@@ -66,7 +66,7 @@ def send_unprocessed_areals_to_queue():
     """
     from pathlib import Path
 
-    DATA_ROOT = Path("/app/data/AW_bearbetning")
+    DATA_ROOT = Path("/app/data/AW_bearbetning_2025")
     logger.info("🔍 Recursively scanning all subfolders for unprocessed Areal/Area directories...")
 
     # --- get all areals from DB ---

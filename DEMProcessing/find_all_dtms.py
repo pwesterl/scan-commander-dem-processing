@@ -26,7 +26,7 @@ def find_dtm_files(data_root: Path):
 
 
 if __name__ == "__main__":
-    DATA_ROOT = Path("/app/data/AW_bearbetning")
+    DATA_ROOT = Path("/app/data/AW_bearbetning_2025")
 
     dtm_files = find_dtm_files(DATA_ROOT)
 
@@ -35,7 +35,7 @@ if __name__ == "__main__":
         print(path)
 
     # Optional: write them to a text file
-    output_file = Path("2024dtm.txt")
+    output_file = Path("2025dtm.txt")
     with output_file.open("w", encoding="utf-8") as f:
         for p in dtm_files:
             f.write(str(p) + "\n")

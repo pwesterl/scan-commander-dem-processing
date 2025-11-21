@@ -114,8 +114,8 @@ def run_inference(image_path: Path, model_key: str, model_info: dict, output_roo
 
     output_raster_dir = output_root / model_key / "raster"
     output_vector_dir = output_root / model_key / "vector"
-    output_raster_dir.mkdir(parents=True, exist_ok=True)
-    output_vector_dir.mkdir(parents=True, exist_ok=True)
+    #output_raster_dir.mkdir(parents=True, exist_ok=True)
+    #output_vector_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Running {model_key} inference on {image_path}")
     env = dict(os.environ)

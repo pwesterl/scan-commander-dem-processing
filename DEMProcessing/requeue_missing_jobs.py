@@ -111,5 +111,5 @@ if __name__ == "__main__":
 
     logger.info("🚀 Starting requeue process...")
     requeue_preprocess_jobs(preprocess_txt)
-    requeue_inference_jobs(inference_txt)
+    #requeue_inference_jobs(inference_txt)
     logger.info("🏁 Done requeuing missing jobs.")

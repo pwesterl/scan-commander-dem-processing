@@ -38,7 +38,7 @@ MODEL_MAP = {
     , 'checkpoint' : MODEL_PATH / "kolbotten20cm.pth"
     , 'resolutions': ['20cm'] } , 
     "fangstgrop": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceDetectron2InstanceSegmentationFangstgropar.py"
-    , 'checkpoint' : MODEL_PATH / "fangstgropar10cm.pth"
+    , 'checkpoint' : MODEL_PATH / "fangstgropar10cmImproved.pth"
     , 'resolutions': ['10cm']},
 }
 

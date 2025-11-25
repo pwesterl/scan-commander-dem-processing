@@ -25,7 +25,31 @@ SET status = 'unprocessed',
 WHERE source_path LIKE '%AW_bearbetning_2025%';
 '''
 
+'''
+UPDATE inference_status
+SET status = 'unprocessed'
+WHERE source_path IN (
+    '/app/data/AW_bearbetning_2025/Areal2908/2_dtm/dtm.tif',
+    '/app/data/AW_bearbetning_2025/Areal159/2_dtm/dtm.tif',
+    '/app/data/AW_bearbetning_2025/Areal2566/2_dtm/dtm.tif'
+);
+'''
+
+
 ## Preprocess Table
+
+'''
+
+UPDATE preprocess_status
+SET status = 'unprocessed'
+WHERE source_path IN (
+    '/app/data/AW_bearbetning_2025/Areal2908/2_dtm/dtm.tif',
+    '/app/data/AW_bearbetning_2025/Areal159/2_dtm/dtm.tif',
+    '/app/data/AW_bearbetning_2025/Areal2566/2_dtm/dtm.tif'
+);
+
+
+'''
 
 SELECT DISTINCT source_path FROM preprocess_status WHERE status = 
 'preprocessing';
@@ -57,7 +81,7 @@ curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/liqbnvidia
 sudo apt-get install -y nvidia-container-toolkit
 
 VALIDERA:
-docker exec -it demprocessing_preprocess_worker_1 python3 verify_preprocess_inference.py
+docker exec -it demprocessing_inference_worker python3 verify_preprocess_inference.py
 docker exec -it demprocessing_preprocess_worker_1 python3 missing.py
 docker exec -it demprocessing_preprocess_worker_1 python3 find_all_dtms.py
 docker exec -it demprocessing_preprocess_worker_1 python3 requeue_missing_jobs.py
@@ -66,3 +90,5 @@ docker exec -it demprocessing_preprocess_worker_1 python3 requeue_missing_jobs.p
 Testa GDAL 
 python -c "import osgeo; import gdal; print(osgeo.__file__); print(gdal.VersionInfo())"
 python -c "from osgeo import gdal_array"
+docker run --rm -it demprocessing_inference_worker python -c "from osgeo import gdal_array; print('GDAL array OK:', hasattr(gdal_array, 'Dataset'))"
+

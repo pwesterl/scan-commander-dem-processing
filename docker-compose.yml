@@ -1,0 +1,159 @@
+version: "3.9"
+
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: geoint-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"  # RabbitMQ UI
+    networks:
+      - geoint
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
+  db:
+    image: postgres:15
+    container_name: geoint-db
+    environment:
+      POSTGRES_USER: geouser
+      POSTGRES_PASSWORD: geopass
+      POSTGRES_DB: geoint
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - geoint
+
+  watcher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        REQUIREMENTS_FILE: requirements-watcher.txt
+    container_name: geoint-watcher
+    command: ["python3", "watcher.py"]
+    environment:
+      WATCH_DIR: /app/data/AW_bearbetning
+      POSTGRES_DB: geoint
+      POSTGRES_USER: geouser
+      POSTGRES_PASSWORD: geopass
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+    volumes:
+      - .:/app:cached
+      - ../../geoint-dem-detection:/app/geoint-dem-detection:ro
+      - logs_volume:/app/logs
+      - /skog-nas/scan_data:/app/data:rw
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    depends_on:
+      - db
+    networks:
+      - geoint
+
+  publisher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        REQUIREMENTS_FILE: requirements-publisher.txt
+    container_name: geoint-publisher
+    command: ["python3", "publisher.py"]
+    environment:
+      POSTGRES_DB: geoint
+      POSTGRES_USER: geouser
+      POSTGRES_PASSWORD: geopass
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      RABBITMQ_HOST: rabbitmq
+    volumes:
+      - .:/app:cached
+      - ../../geoint-dem-detection:/app/geoint-dem-detection:ro # tabort?
+      - logs_volume:/app/logs
+      - /skog-nas/scan_data:/app/data:rw #ta bort?
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    depends_on:
+      - db
+      - rabbitmq
+    networks:
+      - geoint
+
+  preprocess_worker:
+    build:
+      context: ../geoint-dem-detection
+      dockerfile: Dockerfile
+    working_dir: /app 
+    command: ["/app/start_preprocess.sh"] 
+    environment:
+      TOOLS_DIR: /app/geoint-dem-detection/tools
+      TEMP_DIR: /app/temp
+      OUTPUT_DIR: /app/data/output
+      DB_FILE: /app/data/db/inference.db
+      RABBITMQ_HOST: rabbitmq
+    volumes:
+      - .:/app:cached
+      - ../geoint-dem-detection:/app/geoint-dem-detection:ro
+      - logs_volume:/app/logs
+      - /skog-nas/scan_data:/app/data:rw
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    depends_on:
+      - rabbitmq
+      - db
+    networks:
+      - geoint
+    deploy:
+      replicas: 1
+
+  inference_worker:
+    build:
+      context: ../geoint-dem-detection
+      dockerfile: Dockerfile
+    working_dir: /app
+    command: ["/app/start_inference.sh"] 
+    environment:
+      INFERENCE_SCRIPT_DIR: /app/geoint-dem-detection/model
+      NVIDIA_VISIBLE_DEVICES: all
+      MODEL_PATH: /app/geoint-dem-detection/trainedModels/InstanceSegmentation
+      RABBITMQ_HOST: rabbitmq
+    volumes:
+      - .:/app:cached
+      - ../geoint-dem-detection:/app/geoint-dem-detection:ro
+      - logs_volume:/app/logs
+      - /skog-nas/scan_data:/app/data:rw
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    depends_on:
+      - rabbitmq
+      - db
+    networks:
+      - geoint
+
+    deploy:
+      replicas: 1
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+      
+
+volumes:
+  data_volume:
+    driver: local
+  logs_volume:
+    driver: local
+  db_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+
+networks:
+  geoint:
+    driver: bridge

@@ -1,0 +1,17 @@
+sudo apt update
+sudo apt install rabbitmq-server -y
+
+
+sudo rabbitmq-server -detached -> starta
+
+sudo ss -tlnp | grep 5672
+rabbitmqctl status
+
+
+peder@F00886:/mnt/i/Peder$ ps aux | grep rabbit 
+peder@F00886:/mnt/i/Peder$  sudo pkill -f beam.smp
+                            sudo pkill -f rabbitmq
+
+
+sudo rabbitmqctl purge_queue preprocess
+sudo rabbitmqctl purge_queue inference

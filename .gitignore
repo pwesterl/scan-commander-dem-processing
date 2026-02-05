@@ -1,0 +1,10 @@
+__pycache__/
+logs/
+temp/
+myr_out/
+Areal*_test_inf/
+*.tif
+*.csv
+*.txt
+mount_from_wsl
+dockerenv.env

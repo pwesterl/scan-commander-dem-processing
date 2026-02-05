@@ -40,6 +40,9 @@ MODEL_MAP = {
     "fangstgrop": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceDetectron2InstanceSegmentationFangstgropar.py"
     , 'checkpoint' : MODEL_PATH / "fangstgropar10cmImproved.pth"
     , 'resolutions': ['10cm']},
+    "myr": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceMyrplusplus.py"
+    , 'checkpoint' : MODEL_PATH / "Myr.weights.h5"
+    , 'resolutions': ['25cm']},
 }
 
 def get_rabbit_connection(retries=5, delay=5):
@@ -95,10 +98,13 @@ def get_models_for_path(inference_path: Path):
     path_str = str(inference_path).lower()
     logger.info(f"DEBUG: checking inference_path={path_str}")
     models = []
+    #TODO Skriv om med regex, alt skicka resolution från preprocessor.
     if "10cm" in path_str:
         resolution = "10cm"
     elif "20cm" in path_str:
         resolution = "20cm"
+    elif "25cm" in path_str:
+        resolution = "25cm"
     else:
         resolution = None
 
@@ -122,16 +128,29 @@ def run_inference(image_path: Path, model_key: str, model_info: dict, output_roo
     repo_root = INFERENCE_SCRIPT_DIR.parent.parent
     env["PYTHONPATH"] = str(repo_root) + ":" + env.get("PYTHONPATH", "")
 
-    cmd = [
-        "python3",
-        str(script_path),
-        str(image_path.parent),
-        str(checkpoint),
-        str(output_raster_dir),
-        str(output_vector_dir),
-        "--threshold=0.9",
-        "--margin=100",
-    ]
+    if model_key == "myr":
+        cmd = [
+            "python3",
+            str(script_path),
+            "--input", str(image_path),
+            "--model_path", str(checkpoint),
+            "--output_dir", str(output_raster_dir),
+            "--tile_size", "1024",
+            "--stride", "512",
+            "--n_bands", "7",
+            "--threshold", "none"
+        ]
+    if model_key in ("kolbotten", "fangstgrop"):
+        cmd = [
+            "python3",
+            str(script_path),
+            str(image_path.parent),
+            str(checkpoint),
+            str(output_raster_dir),
+            str(output_vector_dir),
+            "--threshold=0.9",
+            "--margin=100",
+        ]
 
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=repo_root, env=env)
     logger.info(f"[{model_key}] Inference stdout:\n{result.stdout}")

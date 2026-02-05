@@ -24,33 +24,33 @@ services:
     networks:
       - geoint
 
-  watcher:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        REQUIREMENTS_FILE: requirements-watcher.txt
-    container_name: geoint-watcher
-    command: ["python3", "watcher.py"]
-    environment:
-      WATCH_DIR: /app/data/AW_bearbetning
-      POSTGRES_DB: geoint
-      POSTGRES_USER: geouser
-      POSTGRES_PASSWORD: geopass
-      POSTGRES_HOST: db
-      POSTGRES_PORT: 5432
-    volumes:
-      - .:/app:cached
-      - ../../geoint-dem-detection:/app/geoint-dem-detection:ro
-      - logs_volume:/app/logs
-      - /skog-nas/scan_data:/app/data:rw
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
-    depends_on:
-      - db
-    networks:
-      - geoint
+  # watcher:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #     args:
+  #       REQUIREMENTS_FILE: requirements-watcher.txt
+  #   container_name: geoint-watcher
+  #   command: ["python3", "watcher.py"]
+  #   environment:
+  #     WATCH_DIR: /app/data/AW_bearbetning
+  #     POSTGRES_DB: geoint
+  #     POSTGRES_USER: geouser
+  #     POSTGRES_PASSWORD: geopass
+  #     POSTGRES_HOST: db
+  #     POSTGRES_PORT: 5432
+  #   volumes:
+  #     - .:/app:cached
+  #     - ../../geoint-dem-detection:/app/geoint-dem-detection:ro
+  #     - logs_volume:/app/logs
+  #     - /skog-nas01/scan-data:/app/data:rw
+  #   dns:
+  #     - 8.8.8.8
+  #     - 1.1.1.1
+  #   depends_on:
+  #     - db
+  #   networks:
+  #     - geoint
 
   publisher:
     build:
@@ -71,7 +71,7 @@ services:
       - .:/app:cached
       - ../../geoint-dem-detection:/app/geoint-dem-detection:ro # tabort?
       - logs_volume:/app/logs
-      - /skog-nas/scan_data:/app/data:rw #ta bort?
+      - /skog-nas01/scan-data:/app/data:rw #ta bort?
     dns:
       - 8.8.8.8
       - 1.1.1.1
@@ -89,15 +89,16 @@ services:
     command: ["/app/start_preprocess.sh"] 
     environment:
       TOOLS_DIR: /app/geoint-dem-detection/tools
+      DELIVERY_YEAR: ${DELIVERY_YEAR}
       TEMP_DIR: /app/temp
-      OUTPUT_DIR: /app/data/output
+      DATA_ROOT: /app/data/
       DB_FILE: /app/data/db/inference.db
       RABBITMQ_HOST: rabbitmq
     volumes:
       - .:/app:cached
       - ../geoint-dem-detection:/app/geoint-dem-detection:ro
       - logs_volume:/app/logs
-      - /skog-nas/scan_data:/app/data:rw
+      - /skog-nas01/scan-data:/app/data:rw
     dns:
       - 8.8.8.8
       - 1.1.1.1
@@ -124,7 +125,7 @@ services:
       - .:/app:cached
       - ../geoint-dem-detection:/app/geoint-dem-detection:ro
       - logs_volume:/app/logs
-      - /skog-nas/scan_data:/app/data:rw
+      - /skog-nas01/scan-data:/app/data:rw
     dns:
       - 8.8.8.8
       - 1.1.1.1

@@ -9,6 +9,12 @@ import pika
 from pathlib import Path
 from db_utils import PreprocessRepository, Status
 import time
+import argparse
+
+from tileExtentToShape import ( #OBS Denna fil är ärvd från geoint-dem-detection för att kunna anpassa inparametrar.
+    create_extent_shapefile,
+    create_merged_extent_shapefile, # If we ever have the need to use tiles (too large areals perhaps).
+)
 
 # ----------------- Logging -----------------
 logger = logging.getLogger()
@@ -25,14 +31,31 @@ logger.addHandler(fh)
 
 
 repo = PreprocessRepository()
+
+DATA_ROOT = Path(os.getenv("DATA_ROOT", "/skog-nas01/scan-data/"))
+YEAR = os.getenv("YEAR", "test")
+
+YEAR_PATHS_MAP = {
+    "2021" : "tbd",
+    "2022" : "tbd",
+    "2023" : "tbd",
+    "2024" : "AW_bearbetning",
+    "2025" : "AW_bearbetning_2025",
+    "test" : "AW_bearbetning_test"
+}
+
 DEFAULT_TOOLS_DIR = Path("/mnt/i/Peder/repo/geoint-dem-detection/tools")
 DEFAULT_TEMP_DIR = Path("/mnt/i/Peder/repo/geoint-dem-detection/data/temp")
-DEFAULT_OUTPUT_ROOT = Path("/skog-nas01/scan-data/AW_bearbetning_test")
-
 TOOLS_DIR = Path(os.getenv("TOOLS_DIR", str(DEFAULT_TOOLS_DIR)))
+
 sys.path.append(str(TOOLS_DIR))  # make sure Python can find the modules
+
 from AggregateDEM import process_dem_file
 from fix_geotiff import add_sweref99tm_geokey
+from resampleDEM import resample_dem
+import stackRasters
+
+
 base_temp_dir = Path(os.getenv("TEMP_DIR", str(DEFAULT_TEMP_DIR)))
 worker_id = os.getenv("HOSTNAME") or str(os.getpid())
 # Make the container-specific temp dir
@@ -41,7 +64,7 @@ TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 logger.info(f"Using TEMP_DIR: {TEMP_DIR}")
 
-OUTPUT_ROOT = Path(os.getenv("OUTPUT_DIR", str(DEFAULT_OUTPUT_ROOT)))
+
 
 
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "localhost")
@@ -86,14 +109,14 @@ def safe_ack(ch, delivery_tag):
         logger.warning("Ack failed, message will be requeued automatically")
 
 
-def get_areal_id(path: Path):
+def get_areal_name(path: Path):
     match = re.search(r"/(areal\d+|area\d+)/", str(path), re.IGNORECASE)
     if not match:
         raise ValueError(f"Could not find Areal ID in path: {path}")
-    return match.group(1).lower()
+    return match.group(1)
 
 def rename_output_file(original_path: Path, suffix: str, keep_stem : bool = False) -> Path:
-    areal = get_areal_id(original_path)
+    areal = get_areal_name(original_path)
     if not original_path.exists():
         raise FileNotFoundError(f"File not found: {original_path}")
     if keep_stem:
@@ -110,8 +133,11 @@ def aggregate_20cm(image_path: Path) -> Path:
     logger.info(f"Running aggregate_20cm on {image_path}")
     output_dir = image_path.parent.parent / "aggregated_20cm"
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_file = output_dir / image_path.name
-    if output_file.exists():
+    areal = get_areal_name(image_path)
+
+    output_file = output_dir / f"{areal}_aggregated20cm_{image_path.stem}{image_path.suffix}"
+
+    if os.path.exists(output_file):
         logger.info(f"Aggregated 20cm file already exists, skipping: {output_file}")
         return output_file
     try:
@@ -120,6 +146,21 @@ def aggregate_20cm(image_path: Path) -> Path:
     except Exception as e:
         raise RuntimeError(f"Aggregation failed for {image_path}: {e}")
     
+def resample_DEM(image_path: Path) -> Path:
+    output_dir = image_path.parent.parent / "resampled_25cm"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_file = output_dir / image_path.name
+    if output_file.exists():
+        logger.info(f"Resampled 25cm file already exists, skipping: {output_file}")
+        return output_file
+    try:
+        logger.info(f"Running resample_dem on {image_path}")
+        resample_dem(image_path, output_file, 0.25)
+        return output_file
+    except Exception as e:
+        raise RuntimeError(f"Resample 25cm failed for {image_path}: {e}")
+
+    
 def fix_geotif(image_path: Path) -> bool:
     try:
         add_sweref99tm_geokey(str(image_path), 3006)
@@ -127,8 +168,102 @@ def fix_geotif(image_path: Path) -> bool:
     except Exception as e:
         logger.warning(f"fix_geotif failed for {image_path}: {e}")
         return False
+    
+def get_areal_number(s: str) -> int:
+    return int(re.search(r"\d+", s).group())
 
-def preprocess_image(image_path: Path, aggregation = "10", max_workers: int = 6) -> Path:
+def areal_to_ortho_filename(areal_name: str) -> str:
+    if YEAR=="test":
+        base = 24
+    else:
+        base = int(YEAR[-2:])
+    areal_number = get_areal_number(areal_name)
+    ortho_number = (base*10000) + int(areal_number)
+
+    if YEAR in ("2024", "test"):
+        orto_path = f"Areal{ortho_number}_ortho_clipped.tif"
+    else:
+        orto_path = f"Areal{ortho_number}_ortho_clipped_{YEAR}.tif"
+
+    return orto_path
+
+    
+def areal_to_ortho_path(areal_name: str, orto_dir) -> str:
+    filename = areal_to_ortho_filename(areal_name)
+    path = os.path.join(orto_dir, filename)
+    if not os.path.exists(path):
+        raise FileNotFoundError(path)
+    return path
+    
+def get_orto_file_path(areal):
+    if YEAR == "test":
+        orto_root = DATA_ROOT / f"image-process-2024/orto"
+    else:
+        orto_root = DATA_ROOT / f"image-process-{YEAR}/orto"
+    orto_path = areal_to_ortho_path(areal, orto_root)
+    return str(orto_path)
+
+    
+def stack_rasters(image_path, topograpy_path):
+    areal = get_areal_name(image_path)
+
+    chm_path = str(DATA_ROOT / YEAR_PATHS_MAP[YEAR] / areal / "4_chm" / "chm.tif")
+    orto_path = get_orto_file_path(areal)
+
+    chm_out = str(DATA_ROOT / YEAR_PATHS_MAP[YEAR] / areal / "chm_tile_output"  / "chmExtent.shp")
+    orto_out = str(DATA_ROOT / YEAR_PATHS_MAP[YEAR] / areal / "orto_tile_output" / "ortoExtent.shp")
+    topo_out =  str(DATA_ROOT / YEAR_PATHS_MAP[YEAR] / areal / "topography_tile_output" / "topoExtent.shp")
+    seven_band_out = str(DATA_ROOT / YEAR_PATHS_MAP[YEAR] / areal / "seven_band_raster")
+
+    tileExtent_tasks = [
+        (chm_path, chm_out),
+        (orto_path, orto_out),
+        (str(topograpy_path), topo_out),  
+    ]
+
+
+    for input_path, output_path in tileExtent_tasks:
+        if Path(output_path).exists():
+            logger.info(f"Extent already exists, skipping: {output_path}")
+            continue
+        logger.info(f"Running tile extent for: {input_path}")
+        create_extent_shapefile(input_path, output_path)
+    
+    desired_output = Path(seven_band_out) / f"{areal}_seven_band_25cm.tif"
+
+    if desired_output.exists():
+        logger.info(f"Seven-band raster already exists: {desired_output}")
+        return desired_output
+
+    logger.info(f"Stacking rasters for areal: {areal}")
+    args = argparse.Namespace(
+        canopy=str(chm_out),
+        topo=str(topo_out),
+        ortho=str(orto_out),
+        outdir=str(seven_band_out)
+    )
+    stackRasters.main(args)
+    
+    seven_band_out = Path(seven_band_out)
+    tif_files = list(seven_band_out.glob("*.tif"))
+
+    if not tif_files:
+        raise RuntimeError(f"No output GeoTIFF produced in {seven_band_out}")
+
+    if len(tif_files) > 1:
+        logger.warning(
+            f"Multiple GeoTIFFs found, using first one: {[p.name for p in tif_files]}"
+        )
+
+    produced = tif_files[0]
+    produced.rename(desired_output)
+
+    logger.info(f"Seven-band raster created: {desired_output}")
+
+    return desired_output
+
+
+def preprocess_image(image_path: Path, aggregation = "10", combine_rasters = False, max_workers: int = 6) -> Path:
     preprocess_output_dir = image_path.parent.parent / f"preprocessed_{aggregation}cm"
     output_file = Path(preprocess_output_dir) /  image_path.name 
     if output_file.exists():
@@ -156,6 +291,12 @@ def preprocess_image(image_path: Path, aggregation = "10", max_workers: int = 6)
     
     if result.returncode != 0 and not output_file.exists():
         raise RuntimeError(f"Preprocessing failed for {image_path}")
+    
+    if combine_rasters:
+        logger.info(f"Combining rasters for: {image_path.name }")
+        output_file = rename_output_file(output_file, f"preprocessed_{aggregation}cm")
+        seven_band_output = stack_rasters(image_path, output_file) # Combine the aggregated tif with more rasters
+        return seven_band_output if seven_band_output.exists() else None
 
     return output_file if output_file.exists() else None
     
@@ -176,27 +317,31 @@ def preprocess_callback(ch, method, properties, body):
             logger.info("fix_geotif failed, or has already been referenced")
         agg_start = time.perf_counter()
         aggregated_path = aggregate_20cm(path)
-        #TODO: Lägg till funktion för resampleDEM till 25 (samma upplösning som höjdraster) returnerna path
-        #TODO Lägg till funktioner för 
-        aggregated_path = rename_output_file(aggregated_path, "aggregated20cm", keep_stem =True)
+        resampled_DEM_path = resample_DEM(path)
+        
         agg_duration = time.perf_counter() - agg_start
-        logger.info(f"Aggregate_20cm completed on {aggregated_path} in {agg_duration:.2f}s")
+        logger.info(f"Aggregate_20cm & Resample completed on {aggregated_path} in {agg_duration:.2f}s")
         preprocessed_files = []
         image_tasks = [
-            (path, "10"),
-            (aggregated_path, "20"), #TODO lägg till path från resampleDEM och kör denna som en image_task
+            (path, "10", False), #Aggregetion levels 10, 20, 25, booleans = combine rasters
+            (aggregated_path, "20", False),
+            (resampled_DEM_path, "25", True),  
         ]
-        for img, agg in image_tasks:
+        for img, agg, combine_rasters in image_tasks:
             try:
                 logger.info(f"Running preprocessing on {img} (aggregation={agg}cm)")
                 step_start = time.perf_counter()
-                preprocessed = preprocess_image(img, aggregation=agg) #TODO lägg till flagga för stack_rasters (7bands modeller)
-                #implementera kod i preprocess_image för att köra stackraster
+                preprocessed = preprocess_image(img, aggregation=agg, combine_rasters=combine_rasters)
                 step_duration = time.perf_counter() - step_start
 
                 if preprocessed:
-                    suffix = f"preprocessed_{agg}cm"
-                    preprocessed = rename_output_file(preprocessed, suffix)
+                    if combine_rasters:
+                        suffix = f"preprocessed_seven_bands_{agg}cm"
+                    else:
+                        suffix = f"preprocessed_{agg}cm"
+                    #Fixa så vi inte döper om mappen för agg=25
+                    if not combine_rasters:
+                        preprocessed = rename_output_file(preprocessed, suffix)
                     preprocessed_files.append(preprocessed)
                     logger.info(f"Preprocessing completed for {img} in {step_duration:.2f}s")
                     safe_publish("inference", {"path": str(path), "inference_path": str(preprocessed)})

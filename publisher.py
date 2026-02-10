@@ -25,6 +25,19 @@ QUEUE_POLL_INTERVAL = 5
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "localhost")
 RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", 5672))
 
+DATA_ROOT = Path(os.getenv("DATA_ROOT", "/skog-nas01/scan-data/"))
+YEAR = os.getenv("DELIVERY_YEAR", "test")
+
+YEAR_PATHS_MAP = {
+    "2021" : "tbd",
+    "2022" : "tbd",
+    "2023" : "tbd",
+    "2024" : "AW_bearbetning",
+    "2025" : "AW_bearbetning_2025",
+    "test" : "AW_bearbetning_test"
+}
+
+
 def get_rabbit_connection(retries=5, delay=5):
     retries = 5
     delay = 5
@@ -65,9 +78,8 @@ def send_unprocessed_areals_to_queue():
     and queue them to RabbitMQ.
     """
     from pathlib import Path
-
-    DATA_ROOT = Path("/app/data/AW_bearbetning_2025")
-    logger.info("🔍 Recursively scanning all subfolders for unprocessed Areal/Area directories...")
+    data_path = DATA_ROOT / YEAR_PATHS_MAP[YEAR]
+    logger.info(f"🔍 Recursively scanning all subfolders for unprocessed Areal/Area in {data_path} directories...")
 
     # --- get all areals from DB ---
     processed_areals = repo.get_all_processed_areals()
@@ -75,7 +87,7 @@ def send_unprocessed_areals_to_queue():
 
     # --- find all directories named Areal* or at any depth ---
     disk_areals = []
-    for root, dirs, files in os.walk(DATA_ROOT):
+    for root, dirs, files in os.walk(data_path):
         for d in dirs:
             d_lower = d.lower()
             if d_lower.startswith("areal"):
@@ -86,6 +98,7 @@ def send_unprocessed_areals_to_queue():
     missing = []
     for areal_dir in disk_areals:
         areal_name = areal_dir.name.lower()
+        print(areal_dir, areal_name)
         if areal_name not in processed_areals:
             dtm_path = areal_dir / "2_dtm" / "dtm.tif"
             if dtm_path.exists():

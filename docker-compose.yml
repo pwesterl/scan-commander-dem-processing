@@ -67,6 +67,8 @@ services:
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
       RABBITMQ_HOST: rabbitmq
+      DATA_ROOT: /app/data/
+      DELIVERY_YEAR: ${DELIVERY_YEAR}
     volumes:
       - .:/app:cached
       - ../../geoint-dem-detection:/app/geoint-dem-detection:ro # tabort?
@@ -121,6 +123,9 @@ services:
       NVIDIA_VISIBLE_DEVICES: all
       MODEL_PATH: /app/geoint-dem-detection/trainedModels/InstanceSegmentation
       RABBITMQ_HOST: rabbitmq
+      RUN_KOLBOTTEN: ${RUN_KOLBOTTEN}
+      RUN_FANGSTGROP: ${RUN_FANGSTGROP}
+      RUN_MYR: ${RUN_MYR}
     volumes:
       - .:/app:cached
       - ../geoint-dem-detection:/app/geoint-dem-detection:ro

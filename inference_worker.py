@@ -25,10 +25,15 @@ logger.addHandler(fh)
 repo = InferenceRepository()
 DEFAULT_MODEL_PATH = Path("trainedModels/InstanceSegmentation")
 DEFAULT_INFERENCE_SCRIPT_DIR = Path("/mnt/e/Peder/repo/geoint-dem-detection/model")
+DEFAULT_TOOLS_SCRIPT_DIR = Path("/mnt/e/Peder/repo/geoint-dem-detection/tools")
 
 # Use environment variables if they exist, otherwise fallback to defaults
 MODEL_PATH = Path(os.getenv("MODEL_PATH", str(DEFAULT_MODEL_PATH)))   
 INFERENCE_SCRIPT_DIR = Path(os.getenv("INFERENCE_SCRIPT_DIR", str(DEFAULT_INFERENCE_SCRIPT_DIR)))
+TOOLS_SCRIPT_DIR = Path(os.getenv("TOOLS_SCRIPT_DIR", str(DEFAULT_TOOLS_SCRIPT_DIR)))
+
+sys.path.append(str(TOOLS_SCRIPT_DIR))
+from fix_geotiff import fix_directory
 
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "localhost")
 RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", 5672))
@@ -43,6 +48,12 @@ MODEL_MAP = {
     "myr": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceMyrplusplus.py"
     , 'checkpoint' : MODEL_PATH / "Myr.weights.h5"
     , 'resolutions': ['25cm']},
+}
+
+RUN_MODELS = {
+    'kolbotten': os.environ.get('RUN_KOLBOTTEN') == '1',
+    'fangstgrop': os.environ.get('RUN_FANGSTGROP') == '1',
+    'myr': os.environ.get('RUN_MYR') == '1'
 }
 
 def get_rabbit_connection(retries=5, delay=5):
@@ -110,7 +121,8 @@ def get_models_for_path(inference_path: Path):
 
     for model_name, model_info in MODEL_MAP.items():
         if resolution and resolution in model_info.get("resolutions", []):
-            models.append((model_name, model_info   ))
+            if RUN_MODELS[model_name]:
+                models.append((model_name, model_info))
 
     return models
 
@@ -155,6 +167,7 @@ def run_inference(image_path: Path, model_key: str, model_info: dict, output_roo
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=repo_root, env=env)
     logger.info(f"[{model_key}] Inference stdout:\n{result.stdout}")
     logger.error(f"[{model_key}] Inference stderr:\n{result.stderr}")
+    fix_directory(str(output_raster_dir))
 
     # Only fail if no output produced
     if result.returncode != 0 and (not output_vector_dir.exists() or not any(output_vector_dir.iterdir())):

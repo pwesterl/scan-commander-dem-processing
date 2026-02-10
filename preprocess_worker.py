@@ -33,7 +33,7 @@ logger.addHandler(fh)
 repo = PreprocessRepository()
 
 DATA_ROOT = Path(os.getenv("DATA_ROOT", "/skog-nas01/scan-data/"))
-YEAR = os.getenv("YEAR", "test")
+YEAR = os.getenv("DELIVERY_YEAR", "test")
 
 YEAR_PATHS_MAP = {
     "2021" : "tbd",
@@ -266,9 +266,12 @@ def stack_rasters(image_path, topograpy_path):
 def preprocess_image(image_path: Path, aggregation = "10", combine_rasters = False, max_workers: int = 6) -> Path:
     preprocess_output_dir = image_path.parent.parent / f"preprocessed_{aggregation}cm"
     output_file = Path(preprocess_output_dir) /  image_path.name 
-    if output_file.exists():
-        logger.info(f"Preprocessed file already exists, skipping: {output_file}")
-        return None
+    existing_tifs = list(preprocess_output_dir.glob("*.tif"))
+
+    if existing_tifs:
+        logger.info(f"Preprocessed .tif files already exist, skipping: {[f.name for f in existing_tifs]}")
+        # Skip processing
+        result = None
     logger.info(f"Preprocessing {image_path}")
     script = TOOLS_DIR / "concatenatedTopographyThreeChannelsParallell.py"
     script_dir = script.parent

@@ -120,6 +120,7 @@ services:
     command: ["/app/start_inference.sh"] 
     environment:
       INFERENCE_SCRIPT_DIR: /app/geoint-dem-detection/model
+      TOOLS_SCRIPT_DIR: /app/geoint-dem-detection/tools
       NVIDIA_VISIBLE_DEVICES: all
       MODEL_PATH: /app/geoint-dem-detection/trainedModels/InstanceSegmentation
       RABBITMQ_HOST: rabbitmq

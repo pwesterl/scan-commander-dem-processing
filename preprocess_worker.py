@@ -271,7 +271,8 @@ def preprocess_image(image_path: Path, aggregation = "10", combine_rasters = Fal
     if existing_tifs:
         logger.info(f"Preprocessed .tif files already exist, skipping: {[f.name for f in existing_tifs]}")
         # Skip processing
-        result = None
+        return existing_tifs[0]
+    
     logger.info(f"Preprocessing {image_path}")
     script = TOOLS_DIR / "concatenatedTopographyThreeChannelsParallell.py"
     script_dir = script.parent

@@ -26,34 +26,42 @@ repo = InferenceRepository()
 DEFAULT_MODEL_PATH = Path("trainedModels/InstanceSegmentation")
 DEFAULT_INFERENCE_SCRIPT_DIR = Path("/mnt/e/Peder/repo/geoint-dem-detection/model")
 DEFAULT_TOOLS_SCRIPT_DIR = Path("/mnt/e/Peder/repo/geoint-dem-detection/tools")
+DEFAULT_ROOT_GEOINT_DIR = Path("/mnt/e/Peder/repo/geoint-dem-detection")
 
 # Use environment variables if they exist, otherwise fallback to defaults
 MODEL_PATH = Path(os.getenv("MODEL_PATH", str(DEFAULT_MODEL_PATH)))   
 INFERENCE_SCRIPT_DIR = Path(os.getenv("INFERENCE_SCRIPT_DIR", str(DEFAULT_INFERENCE_SCRIPT_DIR)))
 TOOLS_SCRIPT_DIR = Path(os.getenv("TOOLS_SCRIPT_DIR", str(DEFAULT_TOOLS_SCRIPT_DIR)))
+ROOT_GEOINT_DIR = Path(os.getenv("ROOT_GEOINT_DIR", str(DEFAULT_ROOT_GEOINT_DIR)))
 
 sys.path.append(str(TOOLS_SCRIPT_DIR))
 from fix_geotiff import fix_directory
+from DepthToWaterStreams import process_dtw
 
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "localhost")
 RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", 5672))
 
 MODEL_MAP = {
     "kolbotten": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceDetectron2InstanceSegmentationKolbotten.py"
-    , 'checkpoint' : MODEL_PATH / "kolbotten20cm.pth"
+    , 'checkpoint' : MODEL_PATH / "InstanceSegmentation" / "kolbotten20cm.pth"
     , 'resolutions': ['20cm'] } , 
     "fangstgrop": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceDetectron2InstanceSegmentationFangstgropar.py"
-    , 'checkpoint' : MODEL_PATH / "fangstgropar10cmImproved.pth"
+    , 'checkpoint' : MODEL_PATH / "InstanceSegmentation"/ "fangstgropar10cmImproved.pth"
     , 'resolutions': ['10cm']},
     "myr": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceMyrplusplus.py"
-    , 'checkpoint' : MODEL_PATH / "Myr.weights.h5"
+    , 'checkpoint' : MODEL_PATH / "InstanceSegmentation" / "peder2_200epoch.weights.h5"
     , 'resolutions': ['25cm']},
+    "back": {'script_path' : ROOT_GEOINT_DIR / "inferenceVattendragDINOV3.py" # Bäckar
+    , 'checkpoint' : MODEL_PATH / "DINOV3" / "backar.pth"
+    , 'resolutions': ['10cm']
+    ,  'weights_checkpoint' : ROOT_GEOINT_DIR / "weights" / "dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth"},
 }
 
 RUN_MODELS = {
     'kolbotten': os.environ.get('RUN_KOLBOTTEN') == '1',
     'fangstgrop': os.environ.get('RUN_FANGSTGROP') == '1',
-    'myr': os.environ.get('RUN_MYR') == '1'
+    'myr': os.environ.get('RUN_MYR') == '1',
+    'back': os.environ.get('RUN_BACK') == '1' #Bäckar
 }
 
 def get_rabbit_connection(retries=5, delay=5):
@@ -126,53 +134,174 @@ def get_models_for_path(inference_path: Path):
 
     return models
 
-def run_inference(image_path: Path, model_key: str, model_info: dict, output_root: Path):
+def run_dtw_for_areal(image_path: Path, model_output: Path, areal_id: str, threshold=1.0):
+    areal_root = image_path.parent.parent
+    preprocessed_25cm_dir = areal_root / "preprocessed_25cm" 
+    dem_files = list(preprocessed_25cm_dir.glob("*.tif"))
+    if not dem_files:
+        raise FileNotFoundError(f"No .tif files found in {preprocessed_25cm_dir}")
+
+    dem_path = dem_files[0]
+    model_outputs = list(model_output.glob("*.gpkg"))
+    if not model_outputs:
+        raise FileNotFoundError(f"No .gpkg files found in {model_outputs}")
+    water_path = model_outputs[0]
+
+    if not dem_path.exists():
+        logger.warning(f"DEM not found for {areal_id}, skipping DTW")
+        return
+
+    if not water_path.exists():
+        logger.warning(f"Model output not found for {areal_id}, skipping DTW")
+        return
+
+    dtw_output_dir = model_output.parent / "dtw"
+    dtw_output_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"Running DTW for {areal_id}")
+
+    process_dtw(
+        dem_path=dem_path,
+        water_path=water_path,
+        out_dir=dtw_output_dir,
+        threshold=threshold
+    )
+
+def build_myr_command(script_path: Path, checkpoint: Path, image_path: Path, output_dir: Path):
+    return [
+        "python3",
+        str(script_path),
+        "--input", str(image_path),
+        "--model_path", str(checkpoint),
+        "--output_dir", str(output_dir),
+        "--tile_size", "1024",
+        "--stride", "512",
+        "--n_bands", "7",
+        "--threshold", "none"
+    ]
+
+
+def build_back_command(script_path: Path, checkpoint: Path, weights: Path,
+                       image_path: Path, output_dir: Path):
+    return [
+        "python3",
+        str(script_path),
+        "--input", str(image_path),
+        "--weights", str(weights),
+        "--checkpoint", str(checkpoint),
+        "--output_dir", str(output_dir),
+        "--tile_size", "1024",
+        "--threshold", "0.5"
+    ]
+
+
+def build_detectron_command(script_path: Path, checkpoint: Path,
+                            image_path: Path,
+                            raster_dir: Path, vector_dir: Path):
+    return [
+        "python3",
+        str(script_path),
+        str(image_path.parent),
+        str(checkpoint),
+        str(raster_dir),
+        str(vector_dir),
+        "--threshold=0.9",
+        "--margin=100",
+    ]
+
+def build_inference_command(model_key: str,
+                            model_info: dict,
+                            image_path: Path,
+                            output_raster_dir: Path,
+                            output_vector_dir: Path):
+
     script_path = model_info["script_path"]
     checkpoint = model_info["checkpoint"]
 
+    if model_key == "myr":
+        return build_myr_command(script_path, checkpoint, image_path, output_raster_dir)
+
+    if model_key == "back":
+        return build_back_command(
+            script_path,
+            checkpoint,
+            model_info["weights_checkpoint"],
+            image_path,
+            output_raster_dir
+        )
+
+    if model_key in ("kolbotten", "fangstgrop"):
+        return build_detectron_command(
+            script_path,
+            checkpoint,
+            image_path,
+            output_raster_dir,
+            output_vector_dir
+        )
+
+    raise ValueError(f"Unknown model_key: {model_key}")
+
+def execute_command(cmd: list, cwd: Path, env: dict, model_key: str):
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        cwd=cwd,
+        env=env
+    )
+
+    logger.info(f"[{model_key}] Inference stdout:\n{result.stdout}")
+    logger.error(f"[{model_key}] Inference stderr:\n{result.stderr}")
+
+    return result
+
+def run_postprocessing_if_needed(model_key: str,
+                                  image_path: Path,
+                                  output_raster_dir: Path,
+                                  areal_id: str):
+
+    if model_key == "back":
+        run_dtw_for_areal(image_path, output_raster_dir, areal_id)
+
+def run_inference(image_path: Path,
+                  model_key: str,
+                  model_info: dict,
+                  output_root: Path,
+                  areal_id: str):
+
     output_raster_dir = output_root / model_key / "raster"
     output_vector_dir = output_root / model_key / "vector"
-    #output_raster_dir.mkdir(parents=True, exist_ok=True)
-    #output_vector_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Running {model_key} inference on {image_path}")
+
     env = dict(os.environ)
     repo_root = INFERENCE_SCRIPT_DIR.parent.parent
     env["PYTHONPATH"] = str(repo_root) + ":" + env.get("PYTHONPATH", "")
 
-    if model_key == "myr":
-        cmd = [
-            "python3",
-            str(script_path),
-            "--input", str(image_path),
-            "--model_path", str(checkpoint),
-            "--output_dir", str(output_raster_dir),
-            "--tile_size", "1024",
-            "--stride", "512",
-            "--n_bands", "7",
-            "--threshold", "none"
-        ]
-    if model_key in ("kolbotten", "fangstgrop"):
-        cmd = [
-            "python3",
-            str(script_path),
-            str(image_path.parent),
-            str(checkpoint),
-            str(output_raster_dir),
-            str(output_vector_dir),
-            "--threshold=0.9",
-            "--margin=100",
-        ]
+    cmd = build_inference_command(
+        model_key,
+        model_info,
+        image_path,
+        output_raster_dir,
+        output_vector_dir
+    )
 
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=repo_root, env=env)
-    logger.info(f"[{model_key}] Inference stdout:\n{result.stdout}")
-    logger.error(f"[{model_key}] Inference stderr:\n{result.stderr}")
+    result = execute_command(cmd, repo_root, env, model_key)
+
     fix_directory(str(output_raster_dir))
 
-    # Only fail if no output produced
-    if result.returncode != 0 and (not output_vector_dir.exists() or not any(output_vector_dir.iterdir())):
-        raise RuntimeError(f"{model_key} inference failed: {result.stderr}")
+    run_postprocessing_if_needed(
+        model_key,
+        image_path,
+        output_raster_dir,
+        areal_id
+    )
 
+    # Only fail if no output produced
+    if result.returncode != 0 and (
+        not output_vector_dir.exists() or not any(output_vector_dir.iterdir())
+    ):
+        raise RuntimeError(f"{model_key} inference failed: {result.stderr}")
 
 def inference_callback(ch, method, properties, body):
     job = json.loads(body)
@@ -201,8 +330,8 @@ def inference_callback(ch, method, properties, body):
         repo.update_status(source_path, inference_path, model_key, Status.INFERENCING, comment="")
         try:
             start_time = time.perf_counter()
-            run_inference(inference_path, model_key, model_info, output_root)
             areal_id = get_areal_id(inference_path)
+            run_inference(inference_path, model_key, model_info, output_root, areal_id)
             rename_inference_outputs(output_root, model_key, areal_id)
             duration = time.perf_counter() - start_time
 

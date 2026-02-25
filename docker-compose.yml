@@ -121,17 +121,22 @@ services:
     environment:
       INFERENCE_SCRIPT_DIR: /app/geoint-dem-detection/model
       TOOLS_SCRIPT_DIR: /app/geoint-dem-detection/tools
+      ROOT_GEOINT_DIR: /app/geoint-dem-detection
       NVIDIA_VISIBLE_DEVICES: all
-      MODEL_PATH: /app/geoint-dem-detection/trainedModels/InstanceSegmentation
+      MODEL_PATH: /app/geoint-dem-detection/trainedModels
       RABBITMQ_HOST: rabbitmq
       RUN_KOLBOTTEN: ${RUN_KOLBOTTEN}
       RUN_FANGSTGROP: ${RUN_FANGSTGROP}
       RUN_MYR: ${RUN_MYR}
+      RUN_BACK: ${RUN_BACK}
+      TORCH_HOME: /app/.cache/torch
     volumes:
       - .:/app:cached
       - ../geoint-dem-detection:/app/geoint-dem-detection:ro
       - logs_volume:/app/logs
       - /skog-nas01/scan-data:/app/data:rw
+      - ./cache/torch:/app/.cache/torch
+      - temp_output:/app/temp_output
     dns:
       - 8.8.8.8
       - 1.1.1.1
@@ -160,7 +165,10 @@ volumes:
     driver: local
   rabbitmq_data:
     driver: local
-
+  torch_hub_cache:   
+    driver: local
+  temp_output:
+    driver: local
 networks:
   geoint:
     driver: bridge

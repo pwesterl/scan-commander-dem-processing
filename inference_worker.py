@@ -7,6 +7,7 @@ import subprocess
 import re
 import pika
 from pathlib import Path
+import geopandas as gpd
 from db_utils import InferenceRepository, Status
 
 # ----------------- Logging -----------------
@@ -134,7 +135,7 @@ def get_models_for_path(inference_path: Path):
 
     return models
 
-def run_dtw_for_areal(image_path: Path, model_output: Path, areal_id: str, threshold=1.0):
+def run_dtw_for_areal(image_path: Path, inference_shp_path: Path, areal_id: str, threshold=1.0):
     areal_root = image_path.parent.parent
     preprocessed_25cm_dir = areal_root / "preprocessed_25cm" 
     dem_files = list(preprocessed_25cm_dir.glob("*.tif"))
@@ -142,27 +143,23 @@ def run_dtw_for_areal(image_path: Path, model_output: Path, areal_id: str, thres
         raise FileNotFoundError(f"No .tif files found in {preprocessed_25cm_dir}")
 
     dem_path = dem_files[0]
-    model_outputs = list(model_output.glob("*.gpkg"))
-    if not model_outputs:
-        raise FileNotFoundError(f"No .gpkg files found in {model_outputs}")
-    water_path = model_outputs[0]
 
     if not dem_path.exists():
         logger.warning(f"DEM not found for {areal_id}, skipping DTW")
         return
 
-    if not water_path.exists():
+    if not inference_shp_path.exists():
         logger.warning(f"Model output not found for {areal_id}, skipping DTW")
         return
 
-    dtw_output_dir = model_output.parent / "dtw"
+    dtw_output_dir = inference_shp_path.parent.parent / "dtw"
     dtw_output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Running DTW for {areal_id}")
 
     process_dtw(
         dem_path=dem_path,
-        water_path=water_path,
+        water_path=inference_shp_path,
         out_dir=dtw_output_dir,
         threshold=threshold
     )
@@ -227,7 +224,7 @@ def build_inference_command(model_key: str,
             checkpoint,
             model_info["weights_checkpoint"],
             image_path,
-            output_raster_dir
+            output_vector_dir
         )
 
     if model_key in ("kolbotten", "fangstgrop"):
@@ -255,13 +252,42 @@ def execute_command(cmd: list, cwd: Path, env: dict, model_key: str):
 
     return result
 
+
+def create_shp_file_from_gpkg(gpkg_path: Path) -> Path:
+    if not gpkg_path.exists():
+        raise FileNotFoundError(f"GPKG not found: {gpkg_path}")
+
+    shp_path = gpkg_path.with_suffix(".shp")
+
+    gdf = gpd.read_file(gpkg_path)
+    gdf.to_file(shp_path, driver="ESRI Shapefile")
+
+    return shp_path
+
+
 def run_postprocessing_if_needed(model_key: str,
                                   image_path: Path,
                                   output_raster_dir: Path,
                                   areal_id: str):
 
     if model_key == "back":
-        run_dtw_for_areal(image_path, output_raster_dir, areal_id)
+        gpkg_files = list(output_raster_dir.glob("*.gpkg"))
+
+        if not gpkg_files:
+            raise FileNotFoundError(
+                f"No .gpkg file found in {output_raster_dir}"
+            )
+
+        if len(gpkg_files) > 1:
+            raise RuntimeError(
+                f"Multiple .gpkg files found in {output_raster_dir}. "
+                f"Be explicit about which one to use: {gpkg_files}"
+            )
+
+        gpkg_path = gpkg_files[0]
+        print(f"Using GPKG for DTW: {gpkg_path}")
+        shp_path = create_shp_file_from_gpkg(gpkg_path)
+        run_dtw_for_areal(image_path, shp_path, areal_id)
 
 def run_inference(image_path: Path,
                   model_key: str,
@@ -271,7 +297,8 @@ def run_inference(image_path: Path,
 
     output_raster_dir = output_root / model_key / "raster"
     output_vector_dir = output_root / model_key / "vector"
-
+    output_raster_dir.mkdir(parents=True, exist_ok=True)
+    output_vector_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"Running {model_key} inference on {image_path}")
 
     env = dict(os.environ)
@@ -293,7 +320,7 @@ def run_inference(image_path: Path,
     run_postprocessing_if_needed(
         model_key,
         image_path,
-        output_raster_dir,
+        output_vector_dir,
         areal_id
     )
 

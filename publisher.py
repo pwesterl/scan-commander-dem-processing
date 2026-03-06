@@ -71,7 +71,7 @@ def safe_publish(queue_name, message):
             time.sleep(5)
 
 
-def send_unprocessed_areals_to_queue():
+def send_areals_to_queue():
     """
     Recursively scan /app/data/AW_bearbetning (all subfolders like 2021, 2022, 2023)
     for Areal/Area directories that are missing in preprocess_status or not yet preprocessed,
@@ -117,7 +117,7 @@ def send_unprocessed_areals_to_queue():
 
 
 def main():
-    send_unprocessed_areals_to_queue()
+    send_areals_to_queue()
     while True:
         job = repo.get_next_unprocessed()
         if job:

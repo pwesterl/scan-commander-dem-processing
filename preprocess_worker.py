@@ -7,28 +7,17 @@ import subprocess
 import re
 import pika
 from pathlib import Path
-from db_utils import PreprocessRepository, Status
+from utils.db_utils import PreprocessRepository, Status
+from utils.rabbit_helper import RabbitMQHelper
+from utils.logger import LoggerFactory
 import time
 import argparse
-
 from tileExtentToShape import ( #OBS Denna fil är ärvd från geoint-dem-detection för att kunna anpassa inparametrar.
     create_extent_shapefile,
     create_merged_extent_shapefile, # If we ever have the need to use tiles (too large areals perhaps).
 )
 
-# ----------------- Logging -----------------
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
-Path("logs").mkdir(exist_ok=True)
-formatter = logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S")
-ch = logging.StreamHandler(sys.stdout)
-ch.setFormatter(formatter)
-logger.addHandler(ch)
-
-fh = logging.FileHandler("logs/preprocess_worker.log", mode="a")
-fh.setFormatter(formatter)
-logger.addHandler(fh)
-
+logger = LoggerFactory.get_logger("preprocess_worker", "preprocess_worker.log")
 
 repo = PreprocessRepository()
 
@@ -64,49 +53,7 @@ TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 logger.info(f"Using TEMP_DIR: {TEMP_DIR}")
 
-
-
-
-RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "localhost")
-RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", 5672))
-
-def get_rabbit_connection(retries=5, delay=5):
-    for attempt in range(retries):
-        try:
-            return pika.BlockingConnection(
-                pika.ConnectionParameters(host=RABBITMQ_HOST, port=RABBITMQ_PORT)
-            )
-        except pika.exceptions.AMQPConnectionError as e:
-            logger.warning(f"RabbitMQ connection failed ({attempt+1}/{retries}): {e}")
-            time.sleep(delay)
-    raise RuntimeError("Could not connect to RabbitMQ after multiple retries")
-
-
-def safe_publish(queue_name, message):
-    while True:
-        try:
-            connection = get_rabbit_connection()
-            channel = connection.channel()
-            channel.queue_declare(queue=queue_name, durable=True)
-            channel.basic_publish(
-                exchange='',
-                routing_key=queue_name,
-                body=json.dumps(message),
-                properties=pika.BasicProperties(delivery_mode=2),
-            )
-            connection.close()
-            logger.info(f"Published job to {queue_name}: {message}")
-            break
-        except pika.exceptions.AMQPConnectionError:
-            logger.warning(f"Connection lost, retrying publish in 5s...")
-            time.sleep(5)
-
-
-def safe_ack(ch, delivery_tag):
-    try:
-        ch.basic_ack(delivery_tag=delivery_tag)
-    except pika.exceptions.StreamLostError:
-        logger.warning("Ack failed, message will be requeued automatically")
+rabbit = RabbitMQHelper(logger=logger)
 
 
 def get_areal_name(path: Path):
@@ -310,7 +257,7 @@ def preprocess_callback(ch, method, properties, body):
 
     if repo.get_status(path) in [Status.PREPROCESSED, Status.PROCESSED, Status.INFERENCING, Status.PREPROCESSING]:
         logger.info(f"Skipping already processed/in-progress job {path}")
-        safe_ack(ch, method.delivery_tag)
+        rabbit.safe_ack(ch, method.delivery_tag)
         return
 
     repo.update_status(path, Status.PREPROCESSING)
@@ -348,7 +295,7 @@ def preprocess_callback(ch, method, properties, body):
                         preprocessed = rename_output_file(preprocessed, suffix)
                     preprocessed_files.append(preprocessed)
                     logger.info(f"Preprocessing completed for {img} in {step_duration:.2f}s")
-                    safe_publish("inference", {"path": str(path), "inference_path": str(preprocessed)})
+                    rabbit.safe_publish("inference", {"path": str(path), "inference_path": str(preprocessed)})
                     logger.info(f"Queued {preprocessed} for inference")
                 else:
                     logger.warning(f"Preprocessing produced no output for {img} (took {step_duration:.2f}s)")
@@ -368,14 +315,14 @@ def preprocess_callback(ch, method, properties, body):
         repo.update_status(path, Status.PREPROCESS_FAILED)
         logger.error(f"Preprocessing failed for {path}: {e}")
     finally:
-        safe_ack(ch, method.delivery_tag)
+        rabbit.safe_ack(ch, method.delivery_tag)
 
 
 
 def start_consumer():
     while True:
         try:
-            connection = get_rabbit_connection()
+            connection = rabbit.get_connection()
             channel = connection.channel()
             channel.queue_declare(queue="preprocess", durable=True)
             channel.basic_qos(prefetch_count=1)

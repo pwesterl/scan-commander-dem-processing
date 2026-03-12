@@ -5,7 +5,7 @@ import json
 import pika
 import logging
 from pathlib import Path
-import re
+from utils.helper_functions import get_areal_id
 
 # ---------------- Logging ----------------
 logger = logging.getLogger("requeue_missing_jobs")
@@ -19,47 +19,6 @@ ch = logging.StreamHandler(sys.stdout)
 ch.setFormatter(formatter)
 logger.addHandler(ch)
 
-# ---------------- RabbitMQ Config ----------------
-RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
-RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", 5672))
-
-def get_areal_id(path: Path):
-    match = re.search(r"/(areal\d+|area\d+)/", str(path), re.IGNORECASE)
-    if not match:
-        raise ValueError(f"Could not find Areal ID in path: {path}")
-    return match.group(1).lower()
-
-def get_rabbit_connection(retries=5, delay=5):
-    """Try multiple times to connect to RabbitMQ."""
-    for attempt in range(retries):
-        try:
-            return pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST, port=RABBITMQ_PORT))
-        except pika.exceptions.AMQPConnectionError as e:
-            logger.warning(f"RabbitMQ connection failed ({attempt+1}/{retries}): {e}")
-            time.sleep(delay)
-    raise RuntimeError("❌ Could not connect to RabbitMQ after multiple retries.")
-
-def safe_publish(queue_name, message):
-    """Publish a persistent message safely to RabbitMQ."""
-    while True:
-        try:
-            connection = get_rabbit_connection()
-            channel = connection.channel()
-            channel.queue_declare(queue=queue_name, durable=True)
-            channel.basic_publish(
-                exchange='',
-                routing_key=queue_name,
-                body=json.dumps(message),
-                properties=pika.BasicProperties(delivery_mode=2),  # make message persistent
-            )
-            connection.close()
-            logger.info(f"📤 Published to {queue_name}: {message}")
-            break
-        except pika.exceptions.AMQPConnectionError:
-            logger.warning("Connection lost, retrying publish in 5s...")
-            time.sleep(5)
-
-# ---------------- Core Logic ----------------
 
 def requeue_preprocess_jobs(preprocess_txt):
     """Send each path from preprocess TXT file to the 'preprocess' queue."""

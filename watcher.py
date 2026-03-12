@@ -6,25 +6,13 @@ import os
 from pathlib import Path
 from watchdog.observers.polling import PollingObserver as Observer
 from watchdog.events import FileSystemEventHandler
-
-from db_utils import PreprocessRepository, Status
+from utils.db_utils import PreprocessRepository, Status
+from utils.logger import LoggerFactory
 
 WATCH_DIRECTORY = Path(os.getenv("WATCH_DIR", "/skog-nas01/scan-data/AW_bearbetning_test"))
 DB_INSERT_STATUS = Status.UNPROCESSED
 POLL_INTERVAL = 1  # seconds
-
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
-
-formatter = logging.Formatter(
-    "[%(asctime)s] [%(levelname)s] %(message)s",
-    "%Y-%m-%d %H:%M:%S"
-)
-Path("logs").mkdir(exist_ok=True)
-fh = logging.FileHandler("logs/watcher.log", mode="a")
-fh.setFormatter(formatter)
-
-logger.addHandler(fh)
+logger = LoggerFactory.get_logger("watcher", "watcher.log")
 
 class ImageHandler(FileSystemEventHandler):
     """Handles new image files appearing in the watch directory."""

@@ -123,12 +123,15 @@ services:
       TOOLS_SCRIPT_DIR: /app/geoint-dem-detection/tools
       ROOT_GEOINT_DIR: /app/geoint-dem-detection
       NVIDIA_VISIBLE_DEVICES: all
-      MODEL_PATH: /app/geoint-dem-detection/trainedModels
+      MODEL_PATH: /app/data/models/DEMProcessing
       RABBITMQ_HOST: rabbitmq
       RUN_KOLBOTTEN: ${RUN_KOLBOTTEN}
       RUN_FANGSTGROP: ${RUN_FANGSTGROP}
       RUN_MYR: ${RUN_MYR}
       RUN_BACK: ${RUN_BACK}
+      RUN_VAGAR: ${RUN_VAGAR}
+      RUN_VAGAR_KORSPAR: ${RUN_VAGAR_KORSPAR}
+      RUN_KORSPAR: ${RUN_KORSPAR}
       TORCH_HOME: /app/.cache/torch
     volumes:
       - .:/app:cached

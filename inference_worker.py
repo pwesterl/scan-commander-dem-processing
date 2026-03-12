@@ -4,24 +4,15 @@ import json
 import time
 import logging
 import subprocess
-import re
 import pika
 from pathlib import Path
 import geopandas as gpd
-from db_utils import InferenceRepository, Status
+from utils.db_utils import InferenceRepository, Status
+from utils.rabbit_helper import RabbitMQHelper
+from utils.helper_functions import get_areal_id
+from utils.logger import LoggerFactory
 
-# ----------------- Logging -----------------
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
-Path("logs").mkdir(exist_ok=True)
-formatter = logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S")
-ch = logging.StreamHandler(sys.stdout)
-ch.setFormatter(formatter)
-logger.addHandler(ch)
-
-fh = logging.FileHandler("logs/inference_worker.log", mode="a")
-fh.setFormatter(formatter)
-logger.addHandler(fh)
+logger = LoggerFactory.get_logger("inference_worker", "inference_worker.log")
 
 repo = InferenceRepository()
 DEFAULT_MODEL_PATH = Path("trainedModels/InstanceSegmentation")
@@ -29,7 +20,6 @@ DEFAULT_INFERENCE_SCRIPT_DIR = Path("/mnt/e/Peder/repo/geoint-dem-detection/mode
 DEFAULT_TOOLS_SCRIPT_DIR = Path("/mnt/e/Peder/repo/geoint-dem-detection/tools")
 DEFAULT_ROOT_GEOINT_DIR = Path("/mnt/e/Peder/repo/geoint-dem-detection")
 
-# Use environment variables if they exist, otherwise fallback to defaults
 MODEL_PATH = Path(os.getenv("MODEL_PATH", str(DEFAULT_MODEL_PATH)))   
 INFERENCE_SCRIPT_DIR = Path(os.getenv("INFERENCE_SCRIPT_DIR", str(DEFAULT_INFERENCE_SCRIPT_DIR)))
 TOOLS_SCRIPT_DIR = Path(os.getenv("TOOLS_SCRIPT_DIR", str(DEFAULT_TOOLS_SCRIPT_DIR)))
@@ -39,57 +29,43 @@ sys.path.append(str(TOOLS_SCRIPT_DIR))
 from fix_geotiff import fix_directory
 from DepthToWaterStreams import process_dtw
 
-RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "localhost")
-RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", 5672))
-
 MODEL_MAP = {
-    "kolbotten": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceDetectron2InstanceSegmentationKolbotten.py"
+    "kolbotten": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceDetectron2InstanceSegmentationKolbotten.py" #Kolbottnar
     , 'checkpoint' : MODEL_PATH / "InstanceSegmentation" / "kolbotten20cm.pth"
     , 'resolutions': ['20cm'] } , 
-    "fangstgrop": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceDetectron2InstanceSegmentationFangstgropar.py"
-    , 'checkpoint' : MODEL_PATH / "InstanceSegmentation"/ "fangstgropar10cmImproved.pth"
+    "fangstgrop": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceDetectron2InstanceSegmentationFangstgropar.py" #Fångstgropar
+    , 'checkpoint' : MODEL_PATH / "InstanceSegmentation"/ "fangstgropar10cmImproved.pth" 
     , 'resolutions': ['10cm']},
-    "myr": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceMyrplusplus.py"
+    "myr": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceMyrplusplus.py" #Myrar 
     , 'checkpoint' : MODEL_PATH / "InstanceSegmentation" / "peder2_200epoch.weights.h5"
     , 'resolutions': ['25cm']},
     "back": {'script_path' : ROOT_GEOINT_DIR / "inferenceVattendragDINOV3.py" # Bäckar
     , 'checkpoint' : MODEL_PATH / "DINOV3" / "backar.pth"
     , 'resolutions': ['10cm']
-    ,  'weights_checkpoint' : ROOT_GEOINT_DIR / "weights" / "dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth"},
+    ,  'weights_checkpoint' : MODEL_PATH / "DINOV3" / "weights" / "dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth"},
+    "korspar": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceKorspar20cmModel.py" # Körspår
+    , 'checkpoint' : MODEL_PATH / "UNets" / "Attention_ResUNetkorspar20cm_alpha75.weights.h5"
+    , 'resolutions': ['20cm']},
+    "vagar": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceMasterModel.py" # Vägar
+    , 'checkpoint' : MODEL_PATH / "UNets" / "Vagar20cm_gamma1_Augmentation.weights.h5"
+    , 'resolutions': ['20cm']},
+    "vagar_korspar": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceMasterModel.py" # Vägar
+    , 'checkpoint' : MODEL_PATH / "UNets" / "VagarKorspar.weights.h5"
+    , 'resolutions': ['20cm']},
 }
 
 RUN_MODELS = {
-    'kolbotten': os.environ.get('RUN_KOLBOTTEN') == '1',
-    'fangstgrop': os.environ.get('RUN_FANGSTGROP') == '1',
-    'myr': os.environ.get('RUN_MYR') == '1',
-    'back': os.environ.get('RUN_BACK') == '1' #Bäckar
+    'kolbotten': os.environ.get('RUN_KOLBOTTEN') == '1', # Kolbottnar
+    'fangstgrop': os.environ.get('RUN_FANGSTGROP') == '1', # Fångstgropar
+    'myr': os.environ.get('RUN_MYR') == '1', # Myrar
+    'back': os.environ.get('RUN_BACK') == '1', #Bäckar
+    'vagar': os.environ.get('RUN_VAGAR') == '1', # Vägar
+    'korspar': os.environ.get('RUN_KORSPAR') == '1', # Körspår
+    'vagar_korspar': os.environ.get('RUN_VAGAR_KORSPAR') == '1', # Vägar + Körspår
 }
 
-def get_rabbit_connection(retries=5, delay=5):
-    for attempt in range(retries):
-        try:
-            return pika.BlockingConnection(
-                pika.ConnectionParameters(host=RABBITMQ_HOST, port=RABBITMQ_PORT)
-            )
-        except pika.exceptions.AMQPConnectionError as e:
-            logger.warning(f"RabbitMQ connection failed ({attempt+1}/{retries}): {e}")
-            time.sleep(delay)
-    raise RuntimeError("Could not connect to RabbitMQ after multiple retries")
+rabbit = RabbitMQHelper(logger=logger)
 
-
-def safe_ack(ch, delivery_tag):
-    """Safe acknowledgement: won't crash if connection lost"""
-    try:
-        ch.basic_ack(delivery_tag=delivery_tag)
-    except pika.exceptions.StreamLostError:
-        logger.warning("Ack failed, message will be requeued automatically")
-
-def get_areal_id(path: Path):
-    match = re.search(r"/(areal\d+|area\d+)/", str(path), re.IGNORECASE)
-    if not match:
-        raise ValueError(f"Could not find Areal ID in path: {path}")
-    return match.group(1).lower()
-    
 def rename_inference_outputs(model_output_root: Path, model_key: str, areal_id: str) -> dict:
     renamed = {'raster': None, 'vector': []}
     raster_dir = model_output_root / model_key / "raster"
@@ -176,7 +152,43 @@ def build_myr_command(script_path: Path, checkpoint: Path, image_path: Path, out
         "--n_bands", "7",
         "--threshold", "none"
     ]
+def build_korspar_command(script_path: Path, checkpoint: Path, image_path: Path, raster_output: Path, vector_output: Path):
+    return [
+        "python3",
+        str(script_path),
+        str(image_path),
+        str(checkpoint),
+        str(raster_output),
+        str(vector_output),
+    ]
 
+
+def build_vagar_command(script_path: Path, checkpoint: Path, image_path: Path, raster_output: Path, vector_output: Path):
+    return [
+        "python3",
+        str(script_path),
+        str(image_path),
+        str(checkpoint),
+        str(raster_output),
+        str(vector_output),
+        "--tile_size", "5000",
+        "--margin", "50",
+        "--num_classes", "2",
+    ]
+
+
+def build_vagar_korspar_command(script_path: Path, checkpoint: Path, image_path: Path, raster_output: Path, vector_output: Path):
+    return [
+        "python3",
+        str(script_path),
+        str(image_path),
+        str(checkpoint),
+        str(raster_output),
+        str(vector_output),
+        "--tile_size", "5000",
+        "--margin", "50",
+        "--num_classes", "3",
+    ]
 
 def build_back_command(script_path: Path, checkpoint: Path, weights: Path,
                        image_path: Path, output_dir: Path):
@@ -235,7 +247,30 @@ def build_inference_command(model_key: str,
             output_raster_dir,
             output_vector_dir
         )
-
+    if model_key == "korspar":
+        return build_korspar_command(
+            script_path,
+            checkpoint,
+            image_path,
+            output_raster_dir,
+            output_vector_dir
+        )
+    if model_key == "vagar":
+        return build_vagar_command(
+            script_path,
+            checkpoint,
+            image_path,
+            output_raster_dir,
+            output_vector_dir
+        )
+    if model_key == "vagar_korspar":
+        return build_vagar_korspar_command(
+            script_path,
+            checkpoint,
+            image_path,
+            output_raster_dir,
+            output_vector_dir
+        )
     raise ValueError(f"Unknown model_key: {model_key}")
 
 def execute_command(cmd: list, cwd: Path, env: dict, model_key: str):
@@ -344,7 +379,7 @@ def inference_callback(ch, method, properties, body):
 
     if not models_to_run:
         logger.info(f"No models configured for {inference_path}")
-        safe_ack(ch, method.delivery_tag)
+        rabbit.safe_ack(ch, method.delivery_tag)
         return
 
     for model_key, model_info in models_to_run:
@@ -385,19 +420,13 @@ def inference_callback(ch, method, properties, body):
 
     total_time = time.perf_counter() - start_total
     logger.info(f"All inference attempts finished for {source_path} in {total_time:.2f}s")
-    safe_ack(ch, method.delivery_tag)
+    rabbit.safe_ack(ch, method.delivery_tag)
 
-
-def all_models_done_for(source_path: Path) -> bool:
-    # om vi vill kolla vilka arealer som är processerade
-    rows = repo.list_all()
-    relevant = [r for r in rows if r["image_path"] == str(source_path)]
-    return all(r["status"] == Status.PROCESSED.value for r in relevant)
 
 def start_consumer():
     while True:
         try:
-            conn = get_rabbit_connection()
+            conn = rabbit.get_connection()
             channel = conn.channel()
             channel.queue_declare(queue="inference", durable=True)
             channel.basic_qos(prefetch_count=1)

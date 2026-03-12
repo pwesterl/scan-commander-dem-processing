@@ -5,25 +5,16 @@ import sys
 from pathlib import Path
 import pika
 import os
-from db_utils import PreprocessRepository, Status
+from utils.db_utils import PreprocessRepository, Status
+from utils.rabbit_helper import RabbitMQHelper
+from utils.logger import LoggerFactory
 
-# --- Logging ---
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
-Path("logs").mkdir(exist_ok=True)
-formatter = logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S")
-fh = logging.FileHandler("logs/publisher.log", mode="a")
-fh.setFormatter(formatter)
-logger.addHandler(fh)
-ch = logging.StreamHandler(sys.stdout)
-ch.setFormatter(formatter)
-logger.addHandler(ch)
+logger = LoggerFactory.get_logger("publisher", "publisher.log")
+
+rabbit = RabbitMQHelper(logger=logger)
 
 repo = PreprocessRepository()
 QUEUE_POLL_INTERVAL = 5
-
-RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "localhost")
-RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", 5672))
 
 DATA_ROOT = Path(os.getenv("DATA_ROOT", "/skog-nas01/scan-data/"))
 YEAR = os.getenv("DELIVERY_YEAR", "test")
@@ -38,46 +29,7 @@ YEAR_PATHS_MAP = {
 }
 
 
-def get_rabbit_connection(retries=5, delay=5):
-    retries = 5
-    delay = 5
-    for attempt in range(retries):
-        try:
-            return pika.BlockingConnection(
-                pika.ConnectionParameters(host=RABBITMQ_HOST, port=RABBITMQ_PORT)
-            )
-        except pika.exceptions.AMQPConnectionError as e:
-            logger.warning(f"RabbitMQ connection failed ({attempt+1}/{retries}): {e}")
-            time.sleep(delay)
-    raise RuntimeError("Could not connect to RabbitMQ after multiple retries")
-
-def safe_publish(queue_name, message):
-    while True:
-        try:
-            connection = get_rabbit_connection()
-            channel = connection.channel()
-            channel.queue_declare(queue=queue_name, durable=True)
-            channel.basic_publish(
-                exchange='',
-                routing_key=queue_name,
-                body=json.dumps(message),
-                properties=pika.BasicProperties(delivery_mode=2),
-            )
-            connection.close()
-            logger.info(f"Published job to {queue_name}: {message}")
-            break
-        except pika.exceptions.AMQPConnectionError:
-            logger.warning(f"Connection lost, retrying publish in 5s...")
-            time.sleep(5)
-
-
 def send_areals_to_queue():
-    """
-    Recursively scan /app/data/AW_bearbetning (all subfolders like 2021, 2022, 2023)
-    for Areal/Area directories that are missing in preprocess_status or not yet preprocessed,
-    and queue them to RabbitMQ.
-    """
-    from pathlib import Path
     data_path = DATA_ROOT / YEAR_PATHS_MAP[YEAR]
     logger.info(f"🔍 Recursively scanning all subfolders for unprocessed Areal/Area in {data_path} directories...")
 
@@ -102,7 +54,7 @@ def send_areals_to_queue():
         if areal_name not in processed_areals:
             dtm_path = areal_dir / "2_dtm" / "dtm.tif"
             if dtm_path.exists():
-                safe_publish("preprocess", {"path": str(dtm_path)})
+                rabbit.safe_publish("preprocess", {"path": str(dtm_path)})
                 logger.info(f"📤 Queued unprocessed Areal: {areal_name} ({dtm_path})")
                 missing.append(areal_name)
             else:
@@ -123,7 +75,7 @@ def main():
         if job:
             path = Path(job["source_path"])
             repo.update_status(path, Status.QUEUED)
-            safe_publish("preprocess", {"path": str(path)})
+            rabbit.safe_publish("preprocess", {"path": str(path)})
         else:
             time.sleep(QUEUE_POLL_INTERVAL)
 

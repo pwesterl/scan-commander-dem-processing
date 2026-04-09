@@ -258,79 +258,79 @@ def preprocess_image(image_path: Path, aggregation = "10", combine_rasters = Fal
 
     return output_file if output_file.exists() else None
     
-    def preprocess_callback(ch, method, properties, body):
-        task_status = "FAILED"
-        publish_ok = False
+def preprocess_callback(ch, method, properties, body):
+    task_status = "FAILED"
+    publish_ok = False
 
-        try:
-            job = json.loads(body)
+    try:
+        job = json.loads(body)
 
-            path = Path(job['lidar_output_path']) / "2_dtm" / "dtm.tif"
-            job_id = job.get("job_id")
-            task_name = job.get("task_name")
+        path = Path(job['lidar_output_path']) / "2_dtm" / "dtm.tif"
+        job_id = job.get("job_id")
+        task_name = job.get("task_name")
 
-            repo.update_status(path, Status.PREPROCESSING)
+        repo.update_status(path, Status.PREPROCESSING)
 
-            start_total = time.perf_counter()
+        start_total = time.perf_counter()
 
-            has_sweref = fix_geotif(path)
-            aggregated_path = aggregate_20cm(path)
-            resampled_dem_path = resample_DEM(path)
+        has_sweref = fix_geotif(path)
+        aggregated_path = aggregate_20cm(path)
+        resampled_dem_path = resample_DEM(path)
 
-            preprocessed_files = []
+        preprocessed_files = []
 
-            image_tasks = [
-                (path, "10", False),
-                (aggregated_path, "20", False),
-                (resampled_dem_path, "25", True),
-            ]
+        image_tasks = [
+            (path, "10", False),
+            (aggregated_path, "20", False),
+            (resampled_dem_path, "25", True),
+        ]
 
-            for img, agg, combine_rasters in image_tasks:
-                logger.info(f"Running preprocessing on {img}")
-                preprocessed = preprocess_image(
-                    img,
-                    aggregation=agg,
-                    combine_rasters=combine_rasters
-                )
+        for img, agg, combine_rasters in image_tasks:
+            logger.info(f"Running preprocessing on {img}")
+            preprocessed = preprocess_image(
+                img,
+                aggregation=agg,
+                combine_rasters=combine_rasters
+            )
 
-                if preprocessed:
-                    if not combine_rasters:
-                        suffix = f"preprocessed_{agg}cm"
-                        preprocessed = rename_output_file(preprocessed, suffix)
+            if preprocessed:
+                if not combine_rasters:
+                    suffix = f"preprocessed_{agg}cm"
+                    preprocessed = rename_output_file(preprocessed, suffix)
 
-                    preprocessed_files.append(preprocessed)
+                preprocessed_files.append(preprocessed)
 
-            if preprocessed_files:
-                repo.update_status(path, Status.PREPROCESSED)
-                task_status = "DONE"
-            else:
-                repo.update_status(path, Status.PREPROCESS_FAILED)
-                task_status = "FAILED"
-
-        except Exception:
-            logger.exception(f"Preprocessing failed for {path}")
+        if preprocessed_files:
+            repo.update_status(path, Status.PREPROCESSED)
+            task_status = "DONE"
+        else:
             repo.update_status(path, Status.PREPROCESS_FAILED)
             task_status = "FAILED"
 
-        finally:
-            try:
-                if job_id and task_name:
-                    result = {
-                        "job_id": job_id,
-                        "task_name": task_name,
-                        "status": task_status
-                    }
+    except Exception:
+        logger.exception(f"Preprocessing failed for {path}")
+        repo.update_status(path, Status.PREPROCESS_FAILED)
+        task_status = "FAILED"
 
-                    rabbit.safe_publish("task_results", result)
-                    publish_ok = True
+    finally:
+        try:
+            if job_id and task_name:
+                result = {
+                    "job_id": job_id,
+                    "task_name": task_name,
+                    "status": task_status
+                }
 
-                    logger.info(f"Sent result: {result}")
+                rabbit.safe_publish("task_results", result)
+                publish_ok = True
 
-            except Exception:
-                logger.exception("Failed to publish result")
+                logger.info(f"Sent result: {result}")
 
-            if publish_ok and ch is not None and method is not None:
-                rabbit.safe_ack(ch, method.delivery_tag)
+        except Exception:
+            logger.exception("Failed to publish result")
+
+        if publish_ok and ch is not None and method is not None:
+            rabbit.safe_ack(ch, method.delivery_tag)
 
 
 def start_consumer():

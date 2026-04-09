@@ -5,7 +5,7 @@ import logging
 import pika
 from typing import Any
 
-class RabbitMQHelper:
+class RabbitMQClient:
     def __init__(self, host: str | None = None, port: int | None = None, logger: logging.Logger | None = None):
         self.host = host or os.getenv("RABBITMQ_HOST", "localhost")
         self.port = port or int(os.getenv("RABBITMQ_PORT", 5672))
@@ -18,7 +18,7 @@ class RabbitMQHelper:
         for attempt in range(1, retries + 1):
             try:
                 connection = pika.BlockingConnection(
-                    pika.ConnectionParameters(host=self.host, port=self.port)
+                    pika.ConnectionParameters(host=self.host, port=self.port, heartbeat=1800, blocked_connection_timeout=1800)
                 )
                 return connection
             except (pika.exceptions.AMQPConnectionError, ConnectionResetError, pika.exceptions.StreamLostError) as e:
@@ -47,10 +47,12 @@ class RabbitMQHelper:
                 self.logger.warning(f"Publish attempt {attempt} failed: {e}. Retrying in {delay}s...")
                 time.sleep(delay)
 
-    @staticmethod
-    def safe_ack(ch: pika.adapters.blocking_connection.BlockingChannel, delivery_tag: int, logger: logging.Logger | None = None):
+    def safe_ack(self, ch, delivery_tag):
         try:
-            ch.basic_ack(delivery_tag=delivery_tag)
-        except (pika.exceptions.AMQPConnectionError, ConnectionResetError, pika.exceptions.StreamLostError) as e:
-            if logger:
-                logger.warning("Ack failed due to lost stream; message will be requeued automatically")
+            if ch.is_open:
+                ch.basic_ack(delivery_tag=delivery_tag)
+                self.logger.info(f"Acked message {delivery_tag}")
+            else:
+                self.logger.error("Cannot ack: channel is closed")
+        except Exception as e:
+            self.logger.error(f"Ack failed: {e}")

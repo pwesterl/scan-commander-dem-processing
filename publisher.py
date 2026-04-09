@@ -54,7 +54,7 @@ def send_areals_to_queue():
         if areal_name not in processed_areals:
             dtm_path = areal_dir / "2_dtm" / "dtm.tif"
             if dtm_path.exists():
-                rabbit.safe_publish("preprocess", {"path": str(dtm_path)})
+                rabbit.safe_publish("dem_preprocess", {"path": str(dtm_path)})
                 logger.info(f"📤 Queued unprocessed Areal: {areal_name} ({dtm_path})")
                 missing.append(areal_name)
             else:
@@ -75,7 +75,7 @@ def main():
         if job:
             path = Path(job["source_path"])
             repo.update_status(path, Status.QUEUED)
-            rabbit.safe_publish("preprocess", {"path": str(path)})
+            rabbit.safe_publish("dem_preprocess", {"path": str(path)})
         else:
             time.sleep(QUEUE_POLL_INTERVAL)
 

@@ -15,7 +15,7 @@ class LoggerFactory:
             return logger
 
         logger.setLevel(logging.INFO)
-
+        logger.propagate = False
         cls.LOG_DIR.mkdir(exist_ok=True)
 
         formatter = logging.Formatter(

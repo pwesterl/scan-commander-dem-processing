@@ -8,7 +8,7 @@ import re
 import pika
 from pathlib import Path
 from utils.db_utils import PreprocessRepository, Status
-from utils.rabbit_helper import RabbitMQHelper
+from utils.rabbit_helper import RabbitMQClient
 from utils.logger import LoggerFactory
 import time
 import argparse
@@ -36,7 +36,7 @@ YEAR_PATHS_MAP = {
 DEFAULT_TOOLS_DIR = Path("/mnt/i/Peder/repo/geoint-dem-detection/tools")
 DEFAULT_TEMP_DIR = Path("/mnt/i/Peder/repo/geoint-dem-detection/data/temp")
 TOOLS_DIR = Path(os.getenv("TOOLS_DIR", str(DEFAULT_TOOLS_DIR)))
-
+GRIZZLY_MODE = os.environ.get('GRIZZLY_MODE') == '1'
 sys.path.append(str(TOOLS_DIR))  # make sure Python can find the modules
 
 from AggregateDEM import process_dem_file
@@ -53,8 +53,15 @@ TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 logger.info(f"Using TEMP_DIR: {TEMP_DIR}")
 
-rabbit = RabbitMQHelper(logger=logger)
+#rabbit = RabbitMQHelper(logger=logger)
+# internal_rabbit = RabbitMQHelper(
+#     host=os.getenv("RABBITMQ_HOST_INTERNAL"),
+#     name="internal",
+#     logger=logger
+# )
 
+# This client listens to the grizzly queue
+rabbit = RabbitMQClient(logger=logger)
 
 def get_areal_name(path: Path):
     match = re.search(r"/(areal\d+|area\d+)/", str(path), re.IGNORECASE)
@@ -251,72 +258,79 @@ def preprocess_image(image_path: Path, aggregation = "10", combine_rasters = Fal
 
     return output_file if output_file.exists() else None
     
-def preprocess_callback(ch, method, properties, body):
-    job = json.loads(body)
-    path = Path(job["path"])
+    def preprocess_callback(ch, method, properties, body):
+        task_status = "FAILED"
+        publish_ok = False
 
-    if repo.get_status(path) in [Status.PREPROCESSED, Status.PROCESSED, Status.INFERENCING, Status.PREPROCESSING]:
-        logger.info(f"Skipping already processed/in-progress job {path}")
-        rabbit.safe_ack(ch, method.delivery_tag)
-        return
+        try:
+            job = json.loads(body)
 
-    repo.update_status(path, Status.PREPROCESSING)
-    try:
-        start_total = time.perf_counter()
-        has_sweref = fix_geotif(path)
-        if not has_sweref:
-            logger.info("fix_geotif failed, or has already been referenced")
-        agg_start = time.perf_counter()
-        aggregated_path = aggregate_20cm(path)
-        resampled_DEM_path = resample_DEM(path)
-        
-        agg_duration = time.perf_counter() - agg_start
-        logger.info(f"Aggregate_20cm & Resample completed on {aggregated_path} in {agg_duration:.2f}s")
-        preprocessed_files = []
-        image_tasks = [
-            (path, "10", False), #Aggregetion levels 10, 20, 25, booleans = combine rasters
-            (aggregated_path, "20", False),
-            (resampled_DEM_path, "25", True),  
-        ]
-        for img, agg, combine_rasters in image_tasks:
-            try:
-                logger.info(f"Running preprocessing on {img} (aggregation={agg}cm)")
-                step_start = time.perf_counter()
-                preprocessed = preprocess_image(img, aggregation=agg, combine_rasters=combine_rasters)
-                step_duration = time.perf_counter() - step_start
+            path = Path(job['lidar_output_path']) / "2_dtm" / "dtm.tif"
+            job_id = job.get("job_id")
+            task_name = job.get("task_name")
+
+            repo.update_status(path, Status.PREPROCESSING)
+
+            start_total = time.perf_counter()
+
+            has_sweref = fix_geotif(path)
+            aggregated_path = aggregate_20cm(path)
+            resampled_dem_path = resample_DEM(path)
+
+            preprocessed_files = []
+
+            image_tasks = [
+                (path, "10", False),
+                (aggregated_path, "20", False),
+                (resampled_dem_path, "25", True),
+            ]
+
+            for img, agg, combine_rasters in image_tasks:
+                logger.info(f"Running preprocessing on {img}")
+                preprocessed = preprocess_image(
+                    img,
+                    aggregation=agg,
+                    combine_rasters=combine_rasters
+                )
 
                 if preprocessed:
-                    if combine_rasters:
-                        suffix = f"preprocessed_seven_bands_{agg}cm"
-                    else:
-                        suffix = f"preprocessed_{agg}cm"
-                    #Fixa så vi inte döper om mappen för agg=25
                     if not combine_rasters:
+                        suffix = f"preprocessed_{agg}cm"
                         preprocessed = rename_output_file(preprocessed, suffix)
+
                     preprocessed_files.append(preprocessed)
-                    logger.info(f"Preprocessing completed for {img} in {step_duration:.2f}s")
-                    rabbit.safe_publish("inference", {"path": str(path), "inference_path": str(preprocessed)})
-                    logger.info(f"Queued {preprocessed} for inference")
-                else:
-                    logger.warning(f"Preprocessing produced no output for {img} (took {step_duration:.2f}s)")
-            except Exception as e:
-                logger.error(f"Preprocessing callback failed for {img} after {time.perf_counter() - step_start:.2f}s: {e}")    
 
-        total_duration = time.perf_counter() - start_total
+            if preprocessed_files:
+                repo.update_status(path, Status.PREPROCESSED)
+                task_status = "DONE"
+            else:
+                repo.update_status(path, Status.PREPROCESS_FAILED)
+                task_status = "FAILED"
 
-        if preprocessed_files:
-            repo.update_status(path, Status.PREPROCESSED)
-            logger.info(f"All preprocessing completed for {path} in {total_duration:.2f}s")
-        else:
+        except Exception:
+            logger.exception(f"Preprocessing failed for {path}")
             repo.update_status(path, Status.PREPROCESS_FAILED)
-            logger.warning(f"No preprocessed outputs created for {path} (total time {total_duration:.2f}s)")
+            task_status = "FAILED"
 
-    except Exception as e:
-        repo.update_status(path, Status.PREPROCESS_FAILED)
-        logger.error(f"Preprocessing failed for {path}: {e}")
-    finally:
-        rabbit.safe_ack(ch, method.delivery_tag)
+        finally:
+            try:
+                if job_id and task_name:
+                    result = {
+                        "job_id": job_id,
+                        "task_name": task_name,
+                        "status": task_status
+                    }
 
+                    rabbit.safe_publish("task_results", result)
+                    publish_ok = True
+
+                    logger.info(f"Sent result: {result}")
+
+            except Exception:
+                logger.exception("Failed to publish result")
+
+            if publish_ok and ch is not None and method is not None:
+                rabbit.safe_ack(ch, method.delivery_tag)
 
 
 def start_consumer():
@@ -324,9 +338,9 @@ def start_consumer():
         try:
             connection = rabbit.get_connection()
             channel = connection.channel()
-            channel.queue_declare(queue="preprocess", durable=True)
+            channel.queue_declare(queue="dem_preprocessing", durable=True)
             channel.basic_qos(prefetch_count=1)
-            channel.basic_consume(queue="preprocess", on_message_callback=preprocess_callback)
+            channel.basic_consume(queue="dem_preprocessing", on_message_callback=preprocess_callback)
             logger.info("Preprocess worker started and consuming")
             channel.start_consuming()
         except pika.exceptions.AMQPConnectionError:

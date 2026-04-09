@@ -17,7 +17,7 @@ DB_PARAMS = {
     "dbname": os.getenv("POSTGRES_DB", "geoint"),
     "user": os.getenv("POSTGRES_USER", "geouser"),
     "password": os.getenv("POSTGRES_PASSWORD", "geopass"),
-    "host": os.getenv("POSTGRES_HOST", "db"),
+    "host": os.getenv("POSTGRES_HOST", "geoint-db"),
     "port": int(os.getenv("POSTGRES_PORT", 5432)),
 }
 

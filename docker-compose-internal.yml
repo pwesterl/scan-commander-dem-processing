@@ -1,5 +1,17 @@
 version: "3.9"
+
 services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: geoint-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"  # RabbitMQ UI
+    networks:
+      - geoint
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
   geoint-db:
     image: postgres:15
     container_name: geoint-db
@@ -8,7 +20,66 @@ services:
       POSTGRES_PASSWORD: geopass
       POSTGRES_DB: geoint
     volumes:
-      - geoint_db_data:/var/lib/postgresql/data
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - geoint
+
+  # watcher:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #     args:
+  #       REQUIREMENTS_FILE: requirements-watcher.txt
+  #   container_name: geoint-watcher
+  #   command: ["python3", "watcher.py"]
+  #   environment:
+  #     WATCH_DIR: /app/data/AW_bearbetning
+  #     POSTGRES_DB: geoint
+  #     POSTGRES_USER: geouser
+  #     POSTGRES_PASSWORD: geopass
+  #     POSTGRES_HOST: db
+  #     POSTGRES_PORT: 5432
+  #   volumes:
+  #     - .:/app:cached
+  #     - ../../geoint-dem-detection:/app/geoint-dem-detection:ro
+  #     - logs_volume:/app/logs
+  #     - /skog-nas01/scan-data:/app/data:rw
+  #   dns:
+  #     - 8.8.8.8
+  #     - 1.1.1.1
+  #   depends_on:
+  #     - db
+  #   networks:
+  #     - geoint
+
+  publisher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        REQUIREMENTS_FILE: requirements-publisher.txt
+    container_name: geoint-publisher
+    command: ["python3", "publisher.py"]
+    environment:
+      POSTGRES_DB: geoint
+      POSTGRES_USER: geouser
+      POSTGRES_PASSWORD: geopass
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      RABBITMQ_HOST: rabbitmq
+      DATA_ROOT: /app/data/
+      DELIVERY_YEAR: ${DELIVERY_YEAR}
+    volumes:
+      - .:/app:cached
+      - ../../geoint-dem-detection:/app/geoint-dem-detection:ro # tabort?
+      - logs_volume:/app/logs
+      - /skog-nas01/scan-data:/app/data:rw #ta bort?
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    depends_on:
+      - db
+      - rabbitmq
     networks:
       - geoint
 
@@ -24,8 +95,7 @@ services:
       TEMP_DIR: /app/temp
       DATA_ROOT: /app/data/
       DB_FILE: /app/data/db/inference.db
-      RABBITMQ_HOST_INTERNAL: rabbitmq
-      RABBITMQ_HOST: grizzly-rabbitmq
+      RABBITMQ_HOST: rabbitmq
     volumes:
       - .:/app:cached
       - ../geoint-dem-detection:/app/geoint-dem-detection:ro
@@ -35,10 +105,10 @@ services:
       - 8.8.8.8
       - 1.1.1.1
     depends_on:
-      - geoint-db
+      - rabbitmq
+      - db
     networks:
       - geoint
-      - grizzly
     deploy:
       replicas: 1
 
@@ -54,8 +124,7 @@ services:
       ROOT_GEOINT_DIR: /app/geoint-dem-detection
       NVIDIA_VISIBLE_DEVICES: all
       MODEL_PATH: /app/data/models/DEMProcessing
-      RABBITMQ_HOST_INTERNAL: rabbitmq
-      RABBITMQ_HOST: grizzly-rabbitmq
+      RABBITMQ_HOST: rabbitmq
       RUN_KOLBOTTEN: ${RUN_KOLBOTTEN}
       RUN_FANGSTGROP: ${RUN_FANGSTGROP}
       RUN_MYR: ${RUN_MYR}
@@ -75,10 +144,10 @@ services:
       - 8.8.8.8
       - 1.1.1.1
     depends_on:
-      - geoint-db
+      - rabbitmq
+      - db
     networks:
       - geoint
-      - grizzly
 
     deploy:
       replicas: 1
@@ -91,16 +160,18 @@ services:
       
 
 volumes:
+  data_volume:
+    driver: local
   logs_volume:
     driver: local
-  geoint_db_data:
+  db_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+  torch_hub_cache:   
     driver: local
   temp_output:
-    driver: local
-  geoint_rabbitmq_data:
     driver: local
 networks:
   geoint:
     driver: bridge
-  grizzly:
-    external: true

@@ -269,6 +269,9 @@ def preprocess_callback(ch, method, properties, body):
         job_id = job.get("job_id")
         task_name = job.get("task_name")
 
+        if job_id and task_name:
+            rabbit.safe_publish("task_results", {"job_id": job_id, "task_name": task_name, "status": "STARTED"})
+
         repo.update_status(path, Status.PREPROCESSING)
 
         start_total = time.perf_counter()

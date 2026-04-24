@@ -401,21 +401,27 @@ def run_inference(image_path: Path,
 
 def inference_callback(ch, method, properties, body):
     job = json.loads(body)
-    #inference_path = Path(job["inference_path"])
-    #source_path = Path(job["path"])
     areal_path = Path(job["lidar_output_path"])
     job_id = job.get("job_id")
     task_name = job.get("task_name")    
     source_path = areal_path / "2_dtm" / "dtm.tif"
     inference_paths = get_inference_paths(areal_path)
 
+    if job_id and task_name:
+        try:
+            rabbit.safe_publish("task_results", {
+                "job_id": job_id, "task_name": task_name, "status": "STARTED"
+            })
+        except Exception:
+            logger.exception("Failed to send STARTED message")
+
+    task_status = "DONE"
+    start_total = time.perf_counter()
+
     if not inference_paths:
         logger.warning(f"No inference inputs found for {areal_path}")
-        # handle failure or just ack
     for inference_path in inference_paths:
         output_root = areal_path / "inference_output"
-
-        start_total = time.perf_counter()
 
         models_to_run = get_models_for_path(inference_path)
         logger.info(f"Models to run for {inference_path}: {[k for k, _ in models_to_run]}")
@@ -457,7 +463,7 @@ def inference_callback(ch, method, properties, body):
                     comment=str(e)
                 )
                 logger.error(f"{model_key} inference failed for {inference_path}: {e}")
-                # Optional: continue with other models or stop completely
+                task_status = "FAILED"
                 continue
 
     total_time = time.perf_counter() - start_total
@@ -467,11 +473,10 @@ def inference_callback(ch, method, properties, body):
             result = {
                 "job_id": job_id,
                 "task_name": task_name,
-                "status": "DONE" 
+                "status": task_status
             }
             rabbit.safe_publish("task_results", result)
             logger.info(f"Sent result: {result}")
-
         except Exception as e:
             logger.exception(f"Failed to send result message: {e}")
     rabbit.safe_ack(ch, method.delivery_tag)
@@ -483,6 +488,7 @@ def start_consumer():
             conn = rabbit.get_connection()
             channel = conn.channel()
             channel.queue_declare(queue="dem_inference", durable=True)
+            channel.queue_declare(queue="task_results", durable=True)
             channel.basic_qos(prefetch_count=1)
             channel.basic_consume(queue="dem_inference", on_message_callback=inference_callback)
             logger.info("Inference worker started and consuming")

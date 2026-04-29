@@ -7,14 +7,12 @@ import subprocess
 import pika
 from pathlib import Path
 import geopandas as gpd
-from utils.db_utils import InferenceRepository, Status
 from utils.rabbit_helper import RabbitMQClient
 from utils.helper_functions import get_areal_id
 from utils.logger import LoggerFactory
 
 logger = LoggerFactory.get_logger("inference_worker", "inference_worker.log")
 
-repo = InferenceRepository()
 DEFAULT_MODEL_PATH = Path("trainedModels/InstanceSegmentation")
 DEFAULT_INFERENCE_SCRIPT_DIR = Path("/mnt/e/Peder/repo/geoint-dem-detection/model")
 DEFAULT_TOOLS_SCRIPT_DIR = Path("/mnt/e/Peder/repo/geoint-dem-detection/tools")
@@ -403,8 +401,7 @@ def inference_callback(ch, method, properties, body):
     job = json.loads(body)
     areal_path = Path(job["lidar_output_path"])
     job_id = job.get("job_id")
-    task_name = job.get("task_name")    
-    source_path = areal_path / "2_dtm" / "dtm.tif"
+    task_name = job.get("task_name")
     inference_paths = get_inference_paths(areal_path)
 
     if job_id and task_name:
@@ -431,43 +428,21 @@ def inference_callback(ch, method, properties, body):
             continue
 
         for model_key, model_info in models_to_run:
-            current_status = repo.get_status(source_path, model_key)
-
-            # if current_status in [Status.INFERENCING, Status.PROCESSED]:
-            #     logger.info(f"Skipping model '{model_key}' — already {current_status.value}")
-            #     continue
-
-            repo.update_status(source_path, inference_path, model_key, Status.INFERENCING, comment="")
             try:
                 start_time = time.perf_counter()
                 areal_id = get_areal_id(inference_path)
                 run_inference(inference_path, model_key, model_info, output_root, areal_id)
                 rename_inference_outputs(output_root, model_key, areal_id)
                 duration = time.perf_counter() - start_time
-
-                repo.update_status(
-                    source_path,
-                    inference_path,
-                    model_key,
-                    Status.PROCESSED,
-                    comment=""
-                )
                 logger.info(f"{model_key} inference completed for {inference_path} in {duration:.2f}s")
 
             except Exception as e:
-                repo.update_status(
-                    source_path,
-                    inference_path,
-                    model_key,
-                    Status.INFERENCE_FAILED,
-                    comment=str(e)
-                )
                 logger.error(f"{model_key} inference failed for {inference_path}: {e}")
                 task_status = "FAILED"
                 continue
 
     total_time = time.perf_counter() - start_total
-    logger.info(f"All inference attempts finished for {source_path} in {total_time:.2f}s")
+    logger.info(f"All inference attempts finished for {areal_path} in {total_time:.2f}s")
     if job_id and task_name:
         try:
             result = {

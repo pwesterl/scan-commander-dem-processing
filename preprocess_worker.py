@@ -7,7 +7,6 @@ import subprocess
 import re
 import pika
 from pathlib import Path
-from utils.db_utils import PreprocessRepository, Status
 from utils.rabbit_helper import RabbitMQClient
 from utils.logger import LoggerFactory
 import time
@@ -19,7 +18,6 @@ from tileExtentToShape import ( #OBS Denna fil är ärvd från geoint-dem-detect
 
 logger = LoggerFactory.get_logger("preprocess_worker", "preprocess_worker.log")
 
-repo = PreprocessRepository()
 
 DATA_ROOT = Path(os.getenv("DATA_ROOT", "/skog-nas01/scan-data/"))
 YEAR = os.getenv("DELIVERY_YEAR", "test")
@@ -272,8 +270,6 @@ def preprocess_callback(ch, method, properties, body):
         if job_id and task_name:
             rabbit.safe_publish("task_results", {"job_id": job_id, "task_name": task_name, "status": "STARTED"})
 
-        repo.update_status(path, Status.PREPROCESSING)
-
         start_total = time.perf_counter()
 
         has_sweref = fix_geotif(path)
@@ -304,15 +300,12 @@ def preprocess_callback(ch, method, properties, body):
                 preprocessed_files.append(preprocessed)
 
         if preprocessed_files:
-            repo.update_status(path, Status.PREPROCESSED)
             task_status = "DONE"
         else:
-            repo.update_status(path, Status.PREPROCESS_FAILED)
             task_status = "FAILED"
 
     except Exception:
         logger.exception(f"Preprocessing failed for {path}")
-        repo.update_status(path, Status.PREPROCESS_FAILED)
         task_status = "FAILED"
 
     finally:

@@ -1,17 +1,5 @@
 version: "3.9"
 services:
-  geoint-db:
-    image: postgres:15
-    container_name: geoint-db
-    environment:
-      POSTGRES_USER: geouser
-      POSTGRES_PASSWORD: geopass
-      POSTGRES_DB: geoint
-    volumes:
-      - geoint_db_data:/var/lib/postgresql/data
-    networks:
-      - geoint
-
   preprocess_worker:
     build:
       context: ../geoint-dem-detection
@@ -34,10 +22,7 @@ services:
     dns:
       - 8.8.8.8
       - 1.1.1.1
-    depends_on:
-      - geoint-db
     networks:
-      - geoint
       - grizzly
     deploy:
       replicas: 1
@@ -74,10 +59,7 @@ services:
     dns:
       - 8.8.8.8
       - 1.1.1.1
-    depends_on:
-      - geoint-db
     networks:
-      - geoint
       - grizzly
 
     deploy:
@@ -93,11 +75,7 @@ services:
 volumes:
   logs_volume:
     driver: local
-  geoint_db_data:
-    driver: local
   temp_output:
-    driver: local
-  geoint_rabbitmq_data:
     driver: local
 networks:
   geoint:

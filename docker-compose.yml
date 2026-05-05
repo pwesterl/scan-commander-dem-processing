@@ -4,6 +4,7 @@ services:
     build:
       context: ../geoint-dem-detection
       dockerfile: Dockerfile
+    image: ghcr.io/scatod/scan-commander-dem-processing/preprocess-worker:latest
     working_dir: /app 
     command: ["/app/start_preprocess.sh"] 
     environment:
@@ -31,6 +32,7 @@ services:
     build:
       context: ../geoint-dem-detection
       dockerfile: Dockerfile
+    image: ghcr.io/scatod/scan-commander-dem-processing/inference-worker:latest
     working_dir: /app
     command: ["/app/start_inference.sh"] 
     environment:

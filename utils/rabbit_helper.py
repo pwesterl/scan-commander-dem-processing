@@ -18,7 +18,7 @@ class RabbitMQClient:
         for attempt in range(1, retries + 1):
             try:
                 connection = pika.BlockingConnection(
-                    pika.ConnectionParameters(host=self.host, port=self.port, heartbeat=1800, blocked_connection_timeout=1800)
+                    pika.ConnectionParameters(host=self.host, port=self.port, heartbeat=0, blocked_connection_timeout=3600)
                 )
                 return connection
             except (pika.exceptions.AMQPConnectionError, ConnectionResetError, pika.exceptions.StreamLostError) as e:

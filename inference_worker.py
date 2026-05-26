@@ -443,8 +443,8 @@ def inference_callback(ch, method, properties, body):
 
     total_time = time.perf_counter() - start_total
     logger.info(f"All inference attempts finished for {areal_path} in {total_time:.2f}s")
-    if job_id and task_name:
-        try:
+    try:
+        if job_id and task_name:
             result = {
                 "job_id": job_id,
                 "task_name": task_name,
@@ -452,9 +452,10 @@ def inference_callback(ch, method, properties, body):
             }
             rabbit.safe_publish("task_results", result)
             logger.info(f"Sent result: {result}")
-        except Exception as e:
-            logger.exception(f"Failed to send result message: {e}")
-    rabbit.safe_ack(ch, method.delivery_tag)
+    except Exception as e:
+        logger.exception(f"Failed to send result message: {e}")
+    finally:
+        rabbit.safe_ack(ch, method.delivery_tag)
 
 
 def start_consumer():

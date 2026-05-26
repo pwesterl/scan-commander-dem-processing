@@ -1,4 +1,3 @@
-version: "3.9"
 services:
   preprocess_worker:
     build:
@@ -9,6 +8,7 @@ services:
     command: ["/app/start_preprocess.sh"] 
     environment:
       TOOLS_DIR: /app/geoint-dem-detection/tools
+      PYTHONPATH: /app/geoint-dem-detection/tools:/app/geoint-dem-detection/model:/app/geoint-dem-detection
       DELIVERY_YEAR: ${DELIVERY_YEAR}
       TEMP_DIR: /app/temp
       DATA_ROOT: /app/data/
@@ -25,6 +25,8 @@ services:
       - 1.1.1.1
     networks:
       - grizzly
+    cpuset: "96-103"
+    restart: unless-stopped
     deploy:
       replicas: 1
 
@@ -39,7 +41,8 @@ services:
       INFERENCE_SCRIPT_DIR: /app/geoint-dem-detection/model
       TOOLS_SCRIPT_DIR: /app/geoint-dem-detection/tools
       ROOT_GEOINT_DIR: /app/geoint-dem-detection
-      NVIDIA_VISIBLE_DEVICES: all
+      PYTHONPATH: /app/geoint-dem-detection/tools:/app/geoint-dem-detection/model:/app/geoint-dem-detection
+      NVIDIA_VISIBLE_DEVICES: MIG-36a9c625-6386-5e93-818e-22ce3c7c124b
       MODEL_PATH: /app/data/models/DEMProcessing
       RABBITMQ_HOST_INTERNAL: rabbitmq
       RABBITMQ_HOST: grizzly-rabbitmq
@@ -64,13 +67,15 @@ services:
     networks:
       - grizzly
 
+    cpuset: "104-111"
+    restart: unless-stopped
     deploy:
       replicas: 1
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: all
+              device_ids: ["MIG-36a9c625-6386-5e93-818e-22ce3c7c124b"]
               capabilities: [gpu]
       
 

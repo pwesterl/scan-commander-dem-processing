@@ -7,5 +7,4 @@ while ! python3 -c 'import socket; exit(0) if socket.socket().connect_ex(("rabbi
   sleep 2
 done
 
-pip install pika psycopg2-binary
 python3 preprocess_worker.py

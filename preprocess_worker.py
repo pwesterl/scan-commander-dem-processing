@@ -189,10 +189,10 @@ def stack_rasters(image_path, topograpy_path):
 
     logger.info(f"Stacking rasters for areal: {areal}")
     args = argparse.Namespace(
-        canopy=str(chm_out),
-        topo=str(topo_out),
-        ortho=str(orto_out),
-        outdir=str(seven_band_out)
+        chm=str(chm_path),
+        topo=str(topograpy_path),
+        ortho=str(orto_path),
+        out=str(seven_band_out)
     )
     stackRasters.main(args)
     

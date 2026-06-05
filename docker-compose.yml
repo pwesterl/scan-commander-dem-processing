@@ -10,6 +10,7 @@ services:
       TOOLS_DIR: /app/geoint-dem-detection/tools
       PYTHONPATH: /app/geoint-dem-detection/tools:/app/geoint-dem-detection/model:/app/geoint-dem-detection
       DELIVERY_YEAR: ${DELIVERY_YEAR}
+      SCAN_ELAN_ORTO_DIR: /app/data/image-process-2026_test/orto
       TEMP_DIR: /app/temp
       DATA_ROOT: /app/data/
       DB_FILE: /app/data/db/inference.db

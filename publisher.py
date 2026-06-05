@@ -25,6 +25,7 @@ YEAR_PATHS_MAP = {
     "2023" : "tbd",
     "2024" : "AW_bearbetning",
     "2025" : "AW_bearbetning_2025",
+    "2026" : "AW_bearbetning_2026_test",
     "test" : "AW_bearbetning_test"
 }
 

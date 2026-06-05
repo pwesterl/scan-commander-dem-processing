@@ -324,6 +324,9 @@ def create_shp_file_from_gpkg(gpkg_path: Path) -> Path:
     if not gpkg_path.exists():
         raise FileNotFoundError(f"GPKG not found: {gpkg_path}")
 
+    if gpkg_path.stat().st_size == 0:
+        raise ValueError(f"GPKG is empty (0 bytes), inference produced no output: {gpkg_path}")
+
     shp_path = gpkg_path.with_suffix(".shp")
 
     gdf = gpd.read_file(gpkg_path)
@@ -353,6 +356,9 @@ def run_postprocessing_if_needed(model_key: str,
 
         gpkg_path = gpkg_files[0]
         print(f"Using GPKG for DTW: {gpkg_path}")
+        if gpkg_path.stat().st_size == 0:
+            logger.warning(f"GPKG is empty for {areal_id}, skipping DTW postprocessing (no detections)")
+            return
         shp_path = create_shp_file_from_gpkg(gpkg_path)
         run_dtw_for_areal(image_path, shp_path, areal_id)
 

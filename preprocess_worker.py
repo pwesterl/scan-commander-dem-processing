@@ -28,6 +28,7 @@ YEAR_PATHS_MAP = {
     "2023" : "tbd",
     "2024" : "AW_bearbetning",
     "2025" : "AW_bearbetning_2025",
+    "2026" : "AW_bearbetning_2026_test",
     "test" : "AW_bearbetning_test"
 }
 
@@ -135,7 +136,7 @@ def areal_to_ortho_filename(areal_name: str) -> str:
     if YEAR in ("2024", "test"):
         orto_path = f"Areal{ortho_number}_ortho_clipped.tif"
     else:
-        orto_path = f"Areal{ortho_number}_ortho_clipped_{YEAR}.tif"
+        orto_path = f"Areal{ortho_number}_ortho_clipped.tif"
 
     return orto_path
 
@@ -148,8 +149,11 @@ def areal_to_ortho_path(areal_name: str, orto_dir) -> str:
     return path
     
 def get_orto_file_path(areal):
-    if YEAR == "test":
-        orto_root = DATA_ROOT / f"image-process-2024/orto"
+    _orto_dir = os.getenv("SCAN_ELAN_ORTO_DIR")
+    if _orto_dir:
+        orto_root = Path(_orto_dir)
+    elif YEAR == "test":
+        orto_root = DATA_ROOT / f"image-process-2024_test/orto"
     else:
         orto_root = DATA_ROOT / f"image-process-{YEAR}/orto"
     orto_path = areal_to_ortho_path(areal, orto_root)
@@ -172,7 +176,6 @@ def stack_rasters(image_path, topograpy_path):
         (orto_path, orto_out),
         (str(topograpy_path), topo_out),  
     ]
-
 
     for input_path, output_path in tileExtent_tasks:
         if Path(output_path).exists():
@@ -218,7 +221,7 @@ def stack_rasters(image_path, topograpy_path):
 def preprocess_image(image_path: Path, aggregation = "10", combine_rasters = False, max_workers: int = 6) -> Path:
     preprocess_output_dir = image_path.parent.parent / f"preprocessed_{aggregation}cm"
     output_file = Path(preprocess_output_dir) /  image_path.name 
-    existing_tifs = list(preprocess_output_dir.glob("*.tif"))
+    existing_tifs = [f for f in preprocess_output_dir.glob("*.tif") if 'hillshade' not in f.name.lower()]
 
     if existing_tifs:
         logger.info(f"Preprocessed .tif files already exist, skipping: {[f.name for f in existing_tifs]}")

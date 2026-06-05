@@ -7,14 +7,12 @@ import subprocess
 import pika
 from pathlib import Path
 import geopandas as gpd
-from utils.db_utils import InferenceRepository, Status
-from utils.rabbit_helper import RabbitMQHelper
+from utils.rabbit_helper import RabbitMQClient
 from utils.helper_functions import get_areal_id
 from utils.logger import LoggerFactory
 
 logger = LoggerFactory.get_logger("inference_worker", "inference_worker.log")
 
-repo = InferenceRepository()
 DEFAULT_MODEL_PATH = Path("trainedModels/InstanceSegmentation")
 DEFAULT_INFERENCE_SCRIPT_DIR = Path("/mnt/e/Peder/repo/geoint-dem-detection/model")
 DEFAULT_TOOLS_SCRIPT_DIR = Path("/mnt/e/Peder/repo/geoint-dem-detection/tools")
@@ -33,8 +31,8 @@ MODEL_MAP = {
     "kolbotten": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceDetectron2InstanceSegmentationKolbotten.py" #Kolbottnar
     , 'checkpoint' : MODEL_PATH / "InstanceSegmentation" / "kolbotten20cm.pth"
     , 'resolutions': ['20cm'] } , 
-    "fangstgrop": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceDetectron2InstanceSegmentationFangstgropar.py" #Fångstgropar
-    , 'checkpoint' : MODEL_PATH / "InstanceSegmentation"/ "fangstgropar10cmImproved.pth" 
+    "fangstgrop": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceFangstgropplusplus.py" #Fångstgropar
+    , 'checkpoint' : MODEL_PATH / "InstanceSegmentation"/ "fangstgropar10cm_unetplusplus.weights.h5" 
     , 'resolutions': ['10cm']},
     "myr": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceMyrplusplus.py" #Myrar 
     , 'checkpoint' : MODEL_PATH / "InstanceSegmentation" / "peder2_200epoch.weights.h5"
@@ -43,12 +41,13 @@ MODEL_MAP = {
     , 'checkpoint' : MODEL_PATH / "DINOV3" / "backar.pth"
     , 'resolutions': ['10cm']
     ,  'weights_checkpoint' : MODEL_PATH / "DINOV3" / "weights" / "dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth"},
-    "korspar": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceKorspar20cmModel.py" # Körspår
-    , 'checkpoint' : MODEL_PATH / "UNets" / "Attention_ResUNetkorspar20cm_alpha75.weights.h5"
-    , 'resolutions': ['20cm']},
-    "vagar": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceMasterModel.py" # Vägar
-    , 'checkpoint' : MODEL_PATH / "UNets" / "Vagar20cm_gamma1_Augmentation.weights.h5"
-    , 'resolutions': ['20cm']},
+    "korspar": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceMyrplusplus.py" # Körspår
+    , 'checkpoint' : MODEL_PATH / "UNets" / "Tracks_unetplusplus_7bands.weights.h5"
+    , 'resolutions': ['25cm']},
+    "vagar": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceDinoV3_7bands.py" # Vägar
+    , 'checkpoint' : MODEL_PATH / "DINOV3" / "VagarDinoV3.pth"
+    , 'resolutions': ['25cm']
+    , 'weights_checkpoint' : MODEL_PATH / "DINOV3" / "weights" / "dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth"},
     "vagar_korspar": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceMasterModel.py" # Vägar
     , 'checkpoint' : MODEL_PATH / "UNets" / "VagarKorspar.weights.h5"
     , 'resolutions': ['20cm']},
@@ -64,7 +63,41 @@ RUN_MODELS = {
     'vagar_korspar': os.environ.get('RUN_VAGAR_KORSPAR') == '1', # Vägar + Körspår
 }
 
-rabbit = RabbitMQHelper(logger=logger)
+
+
+# internal_rabbit = RabbitMQHelper(
+#     host=os.getenv("RABBITMQ_HOST_INTERNAL"),
+#     name="internal",
+#     logger=logger
+# )
+
+# This client listens to the grizzly queue
+rabbit = RabbitMQClient(logger=logger)
+
+def get_inference_paths(areal_path: Path) -> list[Path]:
+    paths = []
+
+    candidates = [
+        areal_path / "preprocessed_10cm",
+        areal_path / "preprocessed_20cm",
+        areal_path / "seven_band_raster",  # 25cm
+    ]
+
+    for folder in candidates:
+        if not folder.exists():
+            continue
+
+        tif_files = list(folder.glob("*.tif"))
+
+        if not tif_files:
+            continue
+
+        if len(tif_files) > 1:
+            logger.warning(f"Multiple tif files in {folder}, using first: {[f.name for f in tif_files]}")
+
+        paths.append(tif_files[0])
+
+    return paths
 
 def rename_inference_outputs(model_output_root: Path, model_key: str, areal_id: str) -> dict:
     renamed = {'raster': None, 'vector': []}
@@ -99,7 +132,7 @@ def get_models_for_path(inference_path: Path):
         resolution = "10cm"
     elif "20cm" in path_str:
         resolution = "20cm"
-    elif "25cm" in path_str:
+    elif "25cm" in path_str or "seven_band_raster" in path_str:
         resolution = "25cm"
     else:
         resolution = None
@@ -152,28 +185,32 @@ def build_myr_command(script_path: Path, checkpoint: Path, image_path: Path, out
         "--n_bands", "7",
         "--threshold", "none"
     ]
-def build_korspar_command(script_path: Path, checkpoint: Path, image_path: Path, raster_output: Path, vector_output: Path):
+def build_korspar_command(script_path: Path, checkpoint: Path, image_path: Path, output_dir: Path):
     return [
         "python3",
         str(script_path),
-        str(image_path),
-        str(checkpoint),
-        str(raster_output),
-        str(vector_output),
+        "--input", str(image_path),
+        "--model_path", str(checkpoint),
+        "--output_dir", str(output_dir),
+        "--tile_size", "256",
+        "--stride", "128",
+        "--n_bands", "7",
+        "--threshold", "0.5",
+        "--output_format", "shp",
     ]
 
 
-def build_vagar_command(script_path: Path, checkpoint: Path, image_path: Path, raster_output: Path, vector_output: Path):
+def build_vagar_command(script_path: Path, checkpoint: Path, weights: Path, image_path: Path, output_dir: Path):
     return [
         "python3",
         str(script_path),
-        str(image_path),
-        str(checkpoint),
-        str(raster_output),
-        str(vector_output),
-        "--tile_size", "5000",
-        "--margin", "50",
-        "--num_classes", "2",
+        "--input", str(image_path),
+        "--weights", str(weights),
+        "--checkpoint", str(checkpoint),
+        "--output_dir", str(output_dir),
+        "--bands", "rgb",
+        "--tile_size", "1024",
+        "--threshold", "0.5",
     ]
 
 
@@ -252,15 +289,14 @@ def build_inference_command(model_key: str,
             script_path,
             checkpoint,
             image_path,
-            output_raster_dir,
             output_vector_dir
         )
     if model_key == "vagar":
         return build_vagar_command(
             script_path,
             checkpoint,
+            model_info["weights_checkpoint"],
             image_path,
-            output_raster_dir,
             output_vector_dir
         )
     if model_key == "vagar_korspar":
@@ -292,6 +328,9 @@ def create_shp_file_from_gpkg(gpkg_path: Path) -> Path:
     if not gpkg_path.exists():
         raise FileNotFoundError(f"GPKG not found: {gpkg_path}")
 
+    if gpkg_path.stat().st_size == 0:
+        raise ValueError(f"GPKG is empty (0 bytes), inference produced no output: {gpkg_path}")
+
     shp_path = gpkg_path.with_suffix(".shp")
 
     gdf = gpd.read_file(gpkg_path)
@@ -321,6 +360,9 @@ def run_postprocessing_if_needed(model_key: str,
 
         gpkg_path = gpkg_files[0]
         print(f"Using GPKG for DTW: {gpkg_path}")
+        if gpkg_path.stat().st_size == 0:
+            logger.warning(f"GPKG is empty for {areal_id}, skipping DTW postprocessing (no detections)")
+            return
         shp_path = create_shp_file_from_gpkg(gpkg_path)
         run_dtw_for_areal(image_path, shp_path, areal_id)
 
@@ -367,60 +409,63 @@ def run_inference(image_path: Path,
 
 def inference_callback(ch, method, properties, body):
     job = json.loads(body)
-    inference_path = Path(job["inference_path"])
-    source_path = Path(job["path"])
-    output_root = inference_path.parent.parent / "inference_output"
+    areal_path = Path(job["lidar_output_path"])
+    job_id = job.get("job_id")
+    task_name = job.get("task_name")
+    inference_paths = get_inference_paths(areal_path)
 
-    print(f"Inference job received: {inference_path}")
-
-    start_total = time.perf_counter()
-    models_to_run = get_models_for_path(inference_path)
-    logger.info(f"Models to run for {inference_path}: {[k for k, _ in models_to_run]}")
-
-    if not models_to_run:
-        logger.info(f"No models configured for {inference_path}")
-        rabbit.safe_ack(ch, method.delivery_tag)
-        return
-
-    for model_key, model_info in models_to_run:
-        current_status = repo.get_status(source_path, model_key)
-
-        if current_status in [Status.INFERENCING, Status.PROCESSED]:
-            logger.info(f"Skipping model '{model_key}' — already {current_status.value}")
-            continue
-
-        repo.update_status(source_path, inference_path, model_key, Status.INFERENCING, comment="")
+    if job_id and task_name:
         try:
-            start_time = time.perf_counter()
-            areal_id = get_areal_id(inference_path)
-            run_inference(inference_path, model_key, model_info, output_root, areal_id)
-            rename_inference_outputs(output_root, model_key, areal_id)
-            duration = time.perf_counter() - start_time
+            rabbit.safe_publish("task_results", {
+                "job_id": job_id, "task_name": task_name, "status": "STARTED"
+            })
+        except Exception:
+            logger.exception("Failed to send STARTED message")
 
-            repo.update_status(
-                source_path,
-                inference_path,
-                model_key,
-                Status.PROCESSED,
-                comment=""
-            )
-            logger.info(f"{model_key} inference completed for {inference_path} in {duration:.2f}s")
+    task_status = "DONE"
+    start_total = time.perf_counter()
 
-        except Exception as e:
-            repo.update_status(
-                source_path,
-                inference_path,
-                model_key,
-                Status.INFERENCE_FAILED,
-                comment=str(e)
-            )
-            logger.error(f"{model_key} inference failed for {inference_path}: {e}")
-            # Optional: continue with other models or stop completely
+    if not inference_paths:
+        logger.warning(f"No inference inputs found for {areal_path}")
+    for inference_path in inference_paths:
+        output_root = areal_path / "inference_output"
+
+        models_to_run = get_models_for_path(inference_path)
+        logger.info(f"Models to run for {inference_path}: {[k for k, _ in models_to_run]}")
+
+        if not models_to_run:
+            logger.info(f"No models configured for {inference_path}")
             continue
+
+        for model_key, model_info in models_to_run:
+            try:
+                start_time = time.perf_counter()
+                areal_id = get_areal_id(inference_path)
+                run_inference(inference_path, model_key, model_info, output_root, areal_id)
+                rename_inference_outputs(output_root, model_key, areal_id)
+                duration = time.perf_counter() - start_time
+                logger.info(f"{model_key} inference completed for {inference_path} in {duration:.2f}s")
+
+            except Exception as e:
+                logger.error(f"{model_key} inference failed for {inference_path}: {e}")
+                task_status = "FAILED"
+                continue
 
     total_time = time.perf_counter() - start_total
-    logger.info(f"All inference attempts finished for {source_path} in {total_time:.2f}s")
-    rabbit.safe_ack(ch, method.delivery_tag)
+    logger.info(f"All inference attempts finished for {areal_path} in {total_time:.2f}s")
+    try:
+        if job_id and task_name:
+            result = {
+                "job_id": job_id,
+                "task_name": task_name,
+                "status": task_status
+            }
+            rabbit.safe_publish("task_results", result)
+            logger.info(f"Sent result: {result}")
+    except Exception as e:
+        logger.exception(f"Failed to send result message: {e}")
+    finally:
+        rabbit.safe_ack(ch, method.delivery_tag)
 
 
 def start_consumer():
@@ -428,9 +473,10 @@ def start_consumer():
         try:
             conn = rabbit.get_connection()
             channel = conn.channel()
-            channel.queue_declare(queue="inference", durable=True)
+            channel.queue_declare(queue="dem_inference", durable=True)
+            channel.queue_declare(queue="task_results", durable=True)
             channel.basic_qos(prefetch_count=1)
-            channel.basic_consume(queue="inference", on_message_callback=inference_callback)
+            channel.basic_consume(queue="dem_inference", on_message_callback=inference_callback)
             logger.info("Inference worker started and consuming")
             channel.start_consuming()
         except pika.exceptions.AMQPConnectionError:

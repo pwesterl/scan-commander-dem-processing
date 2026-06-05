@@ -7,8 +7,7 @@ import subprocess
 import re
 import pika
 from pathlib import Path
-from utils.db_utils import PreprocessRepository, Status
-from utils.rabbit_helper import RabbitMQHelper
+from utils.rabbit_helper import RabbitMQClient
 from utils.logger import LoggerFactory
 import time
 import argparse
@@ -19,7 +18,6 @@ from tileExtentToShape import ( #OBS Denna fil är ärvd från geoint-dem-detect
 
 logger = LoggerFactory.get_logger("preprocess_worker", "preprocess_worker.log")
 
-repo = PreprocessRepository()
 
 DATA_ROOT = Path(os.getenv("DATA_ROOT", "/skog-nas01/scan-data/"))
 YEAR = os.getenv("DELIVERY_YEAR", "test")
@@ -30,13 +28,14 @@ YEAR_PATHS_MAP = {
     "2023" : "tbd",
     "2024" : "AW_bearbetning",
     "2025" : "AW_bearbetning_2025",
+    "2026" : "AW_bearbetning_2026",
     "test" : "AW_bearbetning_test"
 }
 
 DEFAULT_TOOLS_DIR = Path("/mnt/i/Peder/repo/geoint-dem-detection/tools")
 DEFAULT_TEMP_DIR = Path("/mnt/i/Peder/repo/geoint-dem-detection/data/temp")
 TOOLS_DIR = Path(os.getenv("TOOLS_DIR", str(DEFAULT_TOOLS_DIR)))
-
+GRIZZLY_MODE = os.environ.get('GRIZZLY_MODE') == '1'
 sys.path.append(str(TOOLS_DIR))  # make sure Python can find the modules
 
 from AggregateDEM import process_dem_file
@@ -53,8 +52,15 @@ TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 logger.info(f"Using TEMP_DIR: {TEMP_DIR}")
 
-rabbit = RabbitMQHelper(logger=logger)
+#rabbit = RabbitMQHelper(logger=logger)
+# internal_rabbit = RabbitMQHelper(
+#     host=os.getenv("RABBITMQ_HOST_INTERNAL"),
+#     name="internal",
+#     logger=logger
+# )
 
+# This client listens to the grizzly queue
+rabbit = RabbitMQClient(logger=logger)
 
 def get_areal_name(path: Path):
     match = re.search(r"/(areal\d+|area\d+)/", str(path), re.IGNORECASE)
@@ -71,6 +77,12 @@ def rename_output_file(original_path: Path, suffix: str, keep_stem : bool = Fals
     else:  
         new_name = f"{areal}_{suffix}{original_path.suffix}" 
     new_path = original_path.parent / new_name
+    if new_path.exists():
+        logger.info(f"Target already exists, skipping rename: {new_path}")
+        return new_path
+    if original_path.name.lower() == new_name.lower():
+        logger.info(f"Name already matches (case-insensitive), skipping rename: {original_path}")
+        return original_path
     original_path.rename(new_path)
     logger.info(f"Renamed {original_path} -> {new_path}")
     return new_path
@@ -130,7 +142,7 @@ def areal_to_ortho_filename(areal_name: str) -> str:
     if YEAR in ("2024", "test"):
         orto_path = f"Areal{ortho_number}_ortho_clipped.tif"
     else:
-        orto_path = f"Areal{ortho_number}_ortho_clipped_{YEAR}.tif"
+        orto_path = f"Areal{ortho_number}_ortho_clipped.tif"
 
     return orto_path
 
@@ -143,8 +155,11 @@ def areal_to_ortho_path(areal_name: str, orto_dir) -> str:
     return path
     
 def get_orto_file_path(areal):
-    if YEAR == "test":
-        orto_root = DATA_ROOT / f"image-process-2024/orto"
+    _orto_dir = os.getenv("SCAN_ELAN_ORTO_DIR")
+    if _orto_dir:
+        orto_root = Path(_orto_dir)
+    elif YEAR == "test":
+        orto_root = DATA_ROOT / f"image-process-2024_test/orto"
     else:
         orto_root = DATA_ROOT / f"image-process-{YEAR}/orto"
     orto_path = areal_to_ortho_path(areal, orto_root)
@@ -168,7 +183,6 @@ def stack_rasters(image_path, topograpy_path):
         (str(topograpy_path), topo_out),  
     ]
 
-
     for input_path, output_path in tileExtent_tasks:
         if Path(output_path).exists():
             logger.info(f"Extent already exists, skipping: {output_path}")
@@ -184,10 +198,10 @@ def stack_rasters(image_path, topograpy_path):
 
     logger.info(f"Stacking rasters for areal: {areal}")
     args = argparse.Namespace(
-        canopy=str(chm_out),
-        topo=str(topo_out),
-        ortho=str(orto_out),
-        outdir=str(seven_band_out)
+        chm=str(chm_path),
+        topo=str(topograpy_path),
+        ortho=str(orto_path),
+        out=str(seven_band_out)
     )
     stackRasters.main(args)
     
@@ -213,12 +227,20 @@ def stack_rasters(image_path, topograpy_path):
 def preprocess_image(image_path: Path, aggregation = "10", combine_rasters = False, max_workers: int = 6) -> Path:
     preprocess_output_dir = image_path.parent.parent / f"preprocessed_{aggregation}cm"
     output_file = Path(preprocess_output_dir) /  image_path.name 
-    existing_tifs = list(preprocess_output_dir.glob("*.tif"))
+    existing_tifs = [f for f in preprocess_output_dir.glob("*.tif") if 'hillshade' not in f.name.lower()]
 
-    if existing_tifs:
-        logger.info(f"Preprocessed .tif files already exist, skipping: {[f.name for f in existing_tifs]}")
-        # Skip processing
-        return existing_tifs[0]
+    if combine_rasters:
+        # Final output is seven_band_raster, not preprocessed_Xcm — check that instead
+        seven_band_dir = image_path.parent.parent / "seven_band_raster"
+        existing_seven_band = list(seven_band_dir.glob("*.tif")) if seven_band_dir.exists() else []
+        if existing_seven_band:
+            logger.info(f"Seven-band raster already exists, skipping: {[f.name for f in existing_seven_band]}")
+            return existing_seven_band[0]
+    else:
+        existing_tifs = list(preprocess_output_dir.glob("*.tif"))
+        if existing_tifs:
+            logger.info(f"Preprocessed .tif files already exist, skipping: {[f.name for f in existing_tifs]}")
+            return existing_tifs[0]
     
     logger.info(f"Preprocessing {image_path}")
     script = TOOLS_DIR / "concatenatedTopographyThreeChannelsParallell.py"
@@ -252,71 +274,77 @@ def preprocess_image(image_path: Path, aggregation = "10", combine_rasters = Fal
     return output_file if output_file.exists() else None
     
 def preprocess_callback(ch, method, properties, body):
-    job = json.loads(body)
-    path = Path(job["path"])
+    task_status = "FAILED"
+    job_id = None
+    task_name = None
 
-    if repo.get_status(path) in [Status.PREPROCESSED, Status.PROCESSED, Status.INFERENCING, Status.PREPROCESSING]:
-        logger.info(f"Skipping already processed/in-progress job {path}")
-        rabbit.safe_ack(ch, method.delivery_tag)
-        return
-
-    repo.update_status(path, Status.PREPROCESSING)
     try:
+        job = json.loads(body)
+
+        path = Path(job['lidar_output_path']) / "2_dtm" / "dtm.tif"
+        job_id = job.get("job_id")
+        task_name = job.get("task_name")
+
+        if not path.exists():
+            logger.error(f"dtm.tif not found, skipping: {path}")
+            task_status = "FAILED"
+            return
+
+        if job_id and task_name:
+            rabbit.safe_publish("task_results", {"job_id": job_id, "task_name": task_name, "status": "STARTED"})
+
         start_total = time.perf_counter()
+
         has_sweref = fix_geotif(path)
-        if not has_sweref:
-            logger.info("fix_geotif failed, or has already been referenced")
-        agg_start = time.perf_counter()
         aggregated_path = aggregate_20cm(path)
-        resampled_DEM_path = resample_DEM(path)
-        
-        agg_duration = time.perf_counter() - agg_start
-        logger.info(f"Aggregate_20cm & Resample completed on {aggregated_path} in {agg_duration:.2f}s")
+        resampled_dem_path = resample_DEM(path)
+
         preprocessed_files = []
+
         image_tasks = [
-            (path, "10", False), #Aggregetion levels 10, 20, 25, booleans = combine rasters
+            (path, "10", False),
             (aggregated_path, "20", False),
-            (resampled_DEM_path, "25", True),  
+            (resampled_dem_path, "25", True),
         ]
+
         for img, agg, combine_rasters in image_tasks:
-            try:
-                logger.info(f"Running preprocessing on {img} (aggregation={agg}cm)")
-                step_start = time.perf_counter()
-                preprocessed = preprocess_image(img, aggregation=agg, combine_rasters=combine_rasters)
-                step_duration = time.perf_counter() - step_start
+            logger.info(f"Running preprocessing on {img}")
+            preprocessed = preprocess_image(
+                img,
+                aggregation=agg,
+                combine_rasters=combine_rasters
+            )
 
-                if preprocessed:
-                    if combine_rasters:
-                        suffix = f"preprocessed_seven_bands_{agg}cm"
-                    else:
-                        suffix = f"preprocessed_{agg}cm"
-                    #Fixa så vi inte döper om mappen för agg=25
-                    if not combine_rasters:
-                        preprocessed = rename_output_file(preprocessed, suffix)
-                    preprocessed_files.append(preprocessed)
-                    logger.info(f"Preprocessing completed for {img} in {step_duration:.2f}s")
-                    rabbit.safe_publish("inference", {"path": str(path), "inference_path": str(preprocessed)})
-                    logger.info(f"Queued {preprocessed} for inference")
-                else:
-                    logger.warning(f"Preprocessing produced no output for {img} (took {step_duration:.2f}s)")
-            except Exception as e:
-                logger.error(f"Preprocessing callback failed for {img} after {time.perf_counter() - step_start:.2f}s: {e}")    
+            if preprocessed:
+                if not combine_rasters:
+                    suffix = f"preprocessed_{agg}cm"
+                    preprocessed = rename_output_file(preprocessed, suffix)
 
-        total_duration = time.perf_counter() - start_total
+                preprocessed_files.append(preprocessed)
 
         if preprocessed_files:
-            repo.update_status(path, Status.PREPROCESSED)
-            logger.info(f"All preprocessing completed for {path} in {total_duration:.2f}s")
+            task_status = "DONE"
         else:
-            repo.update_status(path, Status.PREPROCESS_FAILED)
-            logger.warning(f"No preprocessed outputs created for {path} (total time {total_duration:.2f}s)")
+            task_status = "FAILED"
 
-    except Exception as e:
-        repo.update_status(path, Status.PREPROCESS_FAILED)
-        logger.error(f"Preprocessing failed for {path}: {e}")
+    except BaseException:
+        logger.exception(f"Preprocessing failed for {path}")
+        task_status = "FAILED"
+
     finally:
-        rabbit.safe_ack(ch, method.delivery_tag)
+        try:
+            if job_id and task_name:
+                result = {
+                    "job_id": job_id,
+                    "task_name": task_name,
+                    "status": task_status
+                }
+                rabbit.safe_publish("task_results", result)
+                logger.info(f"Sent result: {result}")
+        except Exception:
+            logger.exception("Failed to publish result")
 
+        rabbit.safe_ack(ch, method.delivery_tag)
 
 
 def start_consumer():
@@ -324,9 +352,9 @@ def start_consumer():
         try:
             connection = rabbit.get_connection()
             channel = connection.channel()
-            channel.queue_declare(queue="preprocess", durable=True)
+            channel.queue_declare(queue="dem_preprocessing", durable=True)
             channel.basic_qos(prefetch_count=1)
-            channel.basic_consume(queue="preprocess", on_message_callback=preprocess_callback)
+            channel.basic_consume(queue="dem_preprocessing", on_message_callback=preprocess_callback)
             logger.info("Preprocess worker started and consuming")
             channel.start_consuming()
         except pika.exceptions.AMQPConnectionError:

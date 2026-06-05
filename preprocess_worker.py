@@ -28,7 +28,7 @@ YEAR_PATHS_MAP = {
     "2023" : "tbd",
     "2024" : "AW_bearbetning",
     "2025" : "AW_bearbetning_2025",
-    "2026" : "AW_bearbetning_2026_test",
+    "2026" : "AW_bearbetning_2026",
     "test" : "AW_bearbetning_test"
 }
 
@@ -77,6 +77,12 @@ def rename_output_file(original_path: Path, suffix: str, keep_stem : bool = Fals
     else:  
         new_name = f"{areal}_{suffix}{original_path.suffix}" 
     new_path = original_path.parent / new_name
+    if new_path.exists():
+        logger.info(f"Target already exists, skipping rename: {new_path}")
+        return new_path
+    if original_path.name.lower() == new_name.lower():
+        logger.info(f"Name already matches (case-insensitive), skipping rename: {original_path}")
+        return original_path
     original_path.rename(new_path)
     logger.info(f"Renamed {original_path} -> {new_path}")
     return new_path
@@ -223,10 +229,18 @@ def preprocess_image(image_path: Path, aggregation = "10", combine_rasters = Fal
     output_file = Path(preprocess_output_dir) /  image_path.name 
     existing_tifs = [f for f in preprocess_output_dir.glob("*.tif") if 'hillshade' not in f.name.lower()]
 
-    if existing_tifs:
-        logger.info(f"Preprocessed .tif files already exist, skipping: {[f.name for f in existing_tifs]}")
-        # Skip processing
-        return existing_tifs[0]
+    if combine_rasters:
+        # Final output is seven_band_raster, not preprocessed_Xcm — check that instead
+        seven_band_dir = image_path.parent.parent / "seven_band_raster"
+        existing_seven_band = list(seven_band_dir.glob("*.tif")) if seven_band_dir.exists() else []
+        if existing_seven_band:
+            logger.info(f"Seven-band raster already exists, skipping: {[f.name for f in existing_seven_band]}")
+            return existing_seven_band[0]
+    else:
+        existing_tifs = list(preprocess_output_dir.glob("*.tif"))
+        if existing_tifs:
+            logger.info(f"Preprocessed .tif files already exist, skipping: {[f.name for f in existing_tifs]}")
+            return existing_tifs[0]
     
     logger.info(f"Preprocessing {image_path}")
     script = TOOLS_DIR / "concatenatedTopographyThreeChannelsParallell.py"
@@ -261,7 +275,8 @@ def preprocess_image(image_path: Path, aggregation = "10", combine_rasters = Fal
     
 def preprocess_callback(ch, method, properties, body):
     task_status = "FAILED"
-    publish_ok = False
+    job_id = None
+    task_name = None
 
     try:
         job = json.loads(body)
@@ -269,6 +284,11 @@ def preprocess_callback(ch, method, properties, body):
         path = Path(job['lidar_output_path']) / "2_dtm" / "dtm.tif"
         job_id = job.get("job_id")
         task_name = job.get("task_name")
+
+        if not path.exists():
+            logger.error(f"dtm.tif not found, skipping: {path}")
+            task_status = "FAILED"
+            return
 
         if job_id and task_name:
             rabbit.safe_publish("task_results", {"job_id": job_id, "task_name": task_name, "status": "STARTED"})
@@ -307,7 +327,7 @@ def preprocess_callback(ch, method, properties, body):
         else:
             task_status = "FAILED"
 
-    except Exception:
+    except BaseException:
         logger.exception(f"Preprocessing failed for {path}")
         task_status = "FAILED"
 
@@ -319,17 +339,12 @@ def preprocess_callback(ch, method, properties, body):
                     "task_name": task_name,
                     "status": task_status
                 }
-
                 rabbit.safe_publish("task_results", result)
-                publish_ok = True
-
                 logger.info(f"Sent result: {result}")
-
         except Exception:
             logger.exception("Failed to publish result")
 
-        if publish_ok and ch is not None and method is not None:
-            rabbit.safe_ack(ch, method.delivery_tag)
+        rabbit.safe_ack(ch, method.delivery_tag)
 
 
 def start_consumer():

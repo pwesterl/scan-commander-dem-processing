@@ -26,7 +26,7 @@ services:
       - 1.1.1.1
     networks:
       - grizzly
-    cpuset: "96-103"
+    #cpuset: "96-103"
     restart: unless-stopped
     deploy:
       replicas: 1
@@ -43,7 +43,7 @@ services:
       TOOLS_SCRIPT_DIR: /app/geoint-dem-detection/tools
       ROOT_GEOINT_DIR: /app/geoint-dem-detection
       PYTHONPATH: /app/geoint-dem-detection/tools:/app/geoint-dem-detection/model:/app/geoint-dem-detection
-      NVIDIA_VISIBLE_DEVICES: MIG-36a9c625-6386-5e93-818e-22ce3c7c124b
+      #NVIDIA_VISIBLE_DEVICES: MIG-36a9c625-6386-5e93-818e-22ce3c7c124b
       MODEL_PATH: /app/data/models/DEMProcessing
       RABBITMQ_HOST_INTERNAL: rabbitmq
       RABBITMQ_HOST: grizzly-rabbitmq
@@ -68,7 +68,7 @@ services:
     networks:
       - grizzly
 
-    cpuset: "104-111"
+    #cpuset: "104-111"
     restart: unless-stopped
     deploy:
       replicas: 1
@@ -76,7 +76,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["MIG-36a9c625-6386-5e93-818e-22ce3c7c124b"]
+              #device_ids: ["MIG-36a9c625-6386-5e93-818e-22ce3c7c124b"]
               capabilities: [gpu]
       
 

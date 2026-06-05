@@ -31,8 +31,8 @@ MODEL_MAP = {
     "kolbotten": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceDetectron2InstanceSegmentationKolbotten.py" #Kolbottnar
     , 'checkpoint' : MODEL_PATH / "InstanceSegmentation" / "kolbotten20cm.pth"
     , 'resolutions': ['20cm'] } , 
-    "fangstgrop": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceDetectron2InstanceSegmentationFangstgropar.py" #Fångstgropar
-    , 'checkpoint' : MODEL_PATH / "InstanceSegmentation"/ "fangstgropar10cmImproved.pth" 
+    "fangstgrop": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceFangstgropplusplus.py" #Fångstgropar
+    , 'checkpoint' : MODEL_PATH / "InstanceSegmentation"/ "fangstgropar10cm_unetplusplus.weights.h5" 
     , 'resolutions': ['10cm']},
     "myr": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceMyrplusplus.py" #Myrar 
     , 'checkpoint' : MODEL_PATH / "InstanceSegmentation" / "peder2_200epoch.weights.h5"
@@ -41,12 +41,13 @@ MODEL_MAP = {
     , 'checkpoint' : MODEL_PATH / "DINOV3" / "backar.pth"
     , 'resolutions': ['10cm']
     ,  'weights_checkpoint' : MODEL_PATH / "DINOV3" / "weights" / "dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth"},
-    "korspar": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceKorspar20cmModel.py" # Körspår
-    , 'checkpoint' : MODEL_PATH / "UNets" / "Attention_ResUNetkorspar20cm_alpha75.weights.h5"
-    , 'resolutions': ['20cm']},
-    "vagar": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceMasterModel.py" # Vägar
-    , 'checkpoint' : MODEL_PATH / "UNets" / "Vagar20cm_gamma1_Augmentation.weights.h5"
-    , 'resolutions': ['20cm']},
+    "korspar": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceMyrplusplus.py" # Körspår
+    , 'checkpoint' : MODEL_PATH / "UNets" / "Tracks_unetplusplus_7bands.weights.h5"
+    , 'resolutions': ['25cm']},
+    "vagar": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceDinoV3_7bands.py" # Vägar
+    , 'checkpoint' : MODEL_PATH / "DINOV3" / "VagarDinoV3.pth"
+    , 'resolutions': ['25cm']
+    , 'weights_checkpoint' : MODEL_PATH / "DINOV3" / "weights" / "dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth"},
     "vagar_korspar": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceMasterModel.py" # Vägar
     , 'checkpoint' : MODEL_PATH / "UNets" / "VagarKorspar.weights.h5"
     , 'resolutions': ['20cm']},
@@ -131,7 +132,7 @@ def get_models_for_path(inference_path: Path):
         resolution = "10cm"
     elif "20cm" in path_str:
         resolution = "20cm"
-    elif "25cm" in path_str:
+    elif "25cm" in path_str or "seven_band_raster" in path_str:
         resolution = "25cm"
     else:
         resolution = None
@@ -184,28 +185,32 @@ def build_myr_command(script_path: Path, checkpoint: Path, image_path: Path, out
         "--n_bands", "7",
         "--threshold", "none"
     ]
-def build_korspar_command(script_path: Path, checkpoint: Path, image_path: Path, raster_output: Path, vector_output: Path):
+def build_korspar_command(script_path: Path, checkpoint: Path, image_path: Path, output_dir: Path):
     return [
         "python3",
         str(script_path),
-        str(image_path),
-        str(checkpoint),
-        str(raster_output),
-        str(vector_output),
+        "--input", str(image_path),
+        "--model_path", str(checkpoint),
+        "--output_dir", str(output_dir),
+        "--tile_size", "256",
+        "--stride", "128",
+        "--n_bands", "7",
+        "--threshold", "0.5",
+        "--output_format", "shp",
     ]
 
 
-def build_vagar_command(script_path: Path, checkpoint: Path, image_path: Path, raster_output: Path, vector_output: Path):
+def build_vagar_command(script_path: Path, checkpoint: Path, weights: Path, image_path: Path, output_dir: Path):
     return [
         "python3",
         str(script_path),
-        str(image_path),
-        str(checkpoint),
-        str(raster_output),
-        str(vector_output),
-        "--tile_size", "5000",
-        "--margin", "50",
-        "--num_classes", "2",
+        "--input", str(image_path),
+        "--weights", str(weights),
+        "--checkpoint", str(checkpoint),
+        "--output_dir", str(output_dir),
+        "--bands", "rgb",
+        "--tile_size", "1024",
+        "--threshold", "0.5",
     ]
 
 
@@ -284,15 +289,14 @@ def build_inference_command(model_key: str,
             script_path,
             checkpoint,
             image_path,
-            output_raster_dir,
             output_vector_dir
         )
     if model_key == "vagar":
         return build_vagar_command(
             script_path,
             checkpoint,
+            model_info["weights_checkpoint"],
             image_path,
-            output_raster_dir,
             output_vector_dir
         )
     if model_key == "vagar_korspar":

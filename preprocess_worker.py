@@ -26,9 +26,12 @@ YEAR_PATHS_MAP = {
     "2021" : "tbd",
     "2022" : "tbd",
     "2023" : "tbd",
-    "2024" : "AW_bearbetning",
+    "2024" : "AW_bearbetning_2024",
+    "2024_test" : "AW_bearbetning_2024_test",
+    "2025_test" : "AW_bearbetning_2025_test",
     "2025" : "AW_bearbetning_2025",
     "2026" : "AW_bearbetning_2026",
+    "2026_test" : "AW_bearbetning_2026_test",
     "test" : "AW_bearbetning_test"
 }
 
@@ -132,19 +135,17 @@ def get_areal_number(s: str) -> int:
     return int(re.search(r"\d+", s).group())
 
 def areal_to_ortho_filename(areal_name: str) -> str:
-    if YEAR=="test":
+    if YEAR == "test":
         base = 24
+    elif "_test" in YEAR:
+        base = int(YEAR.split("_")[0][-2:])
     else:
         base = int(YEAR[-2:])
     areal_number = get_areal_number(areal_name)
     ortho_number = (base*10000) + int(areal_number)
 
-    if YEAR in ("2024", "test"):
-        orto_path = f"Areal{ortho_number}_ortho_clipped.tif"
-    else:
-        orto_path = f"Areal{ortho_number}_ortho_clipped.tif"
-
-    return orto_path
+    year_suffix = YEAR.split("_")[0] if "_" in YEAR else YEAR
+    return f"Areal{ortho_number}_ortho_clipped_{year_suffix}.tif"
 
     
 def areal_to_ortho_path(areal_name: str, orto_dir) -> str:

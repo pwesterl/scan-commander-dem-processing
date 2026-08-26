@@ -35,7 +35,7 @@ MODEL_MAP = {
     , 'checkpoint' : MODEL_PATH / "InstanceSegmentation"/ "fangstgropar10cm_unetplusplus.weights.h5" 
     , 'resolutions': ['10cm']},
     "myr": {'script_path' : INFERENCE_SCRIPT_DIR / "inferenceMyrplusplus.py" #Myrar 
-    , 'checkpoint' : MODEL_PATH / "InstanceSegmentation" / "peder2_200epoch.weights.h5"
+    , 'checkpoint' : MODEL_PATH / "InstanceSegmentation" / "Myr.weights.h5"
     , 'resolutions': ['25cm']},
     "back": {'script_path' : ROOT_GEOINT_DIR / "inferenceVattendragDINOV3.py" # Bäckar
     , 'checkpoint' : MODEL_PATH / "DINOV3" / "backar.pth"
@@ -255,6 +255,18 @@ def build_detectron_command(script_path: Path, checkpoint: Path,
         "--margin=100",
     ]
 
+def build_fangstgrop_command(script_path: Path, checkpoint: Path,
+                             image_path: Path, output_dir: Path):
+    return [
+        "python3",
+        str(script_path),
+        "--input", str(image_path.parent),
+        "--model_path", str(checkpoint),
+        "--output_dir", str(output_dir),
+        "--threshold", "0.5",
+        "--tile_size", "512",
+    ]
+
 def build_inference_command(model_key: str,
                             model_info: dict,
                             image_path: Path,
@@ -276,12 +288,19 @@ def build_inference_command(model_key: str,
             output_vector_dir
         )
 
-    if model_key in ("kolbotten", "fangstgrop"):
+    if model_key == "kolbotten":
         return build_detectron_command(
             script_path,
             checkpoint,
             image_path,
             output_raster_dir,
+            output_vector_dir
+        )
+    if model_key == "fangstgrop":
+        return build_fangstgrop_command(
+            script_path,
+            checkpoint,
+            image_path,
             output_vector_dir
         )
     if model_key == "korspar":
@@ -348,9 +367,8 @@ def run_postprocessing_if_needed(model_key: str,
         gpkg_files = list(output_raster_dir.glob("*.gpkg"))
 
         if not gpkg_files:
-            raise FileNotFoundError(
-                f"No .gpkg file found in {output_raster_dir}"
-            )
+            logger.warning(f"No .gpkg file found for {areal_id} (no detections), skipping DTW postprocessing")
+            return
 
         if len(gpkg_files) > 1:
             raise RuntimeError(
@@ -376,6 +394,10 @@ def run_inference(image_path: Path,
     output_vector_dir = output_root / model_key / "vector"
     output_raster_dir.mkdir(parents=True, exist_ok=True)
     output_vector_dir.mkdir(parents=True, exist_ok=True)
+    # Clear stale output files to avoid conflicts on re-runs
+    if model_key == "back":
+        for stale in list(output_vector_dir.glob("*.gpkg")) + list(output_vector_dir.glob("*.shp")):
+            stale.unlink(missing_ok=True)
     logger.info(f"Running {model_key} inference on {image_path}")
 
     env = dict(os.environ)
